@@ -346,13 +346,16 @@ func TestNegativeArrayLenUnknown(t *testing.T) {
 
 func TestOverflowArrayLenUnknown(t *testing.T) {
 	t.Parallel()
-	st := parseStruct(t, `type S struct {
-		A [1<<61]uint64
-	}`)
 	s := layout.SizerFor("amd64")
-	res, _ := s.Compute(nil, st.Fields, nil)
-	if !res.Unknown {
-		t.Fatal("expected Unknown for overflowing array size")
+	for _, src := range []string{
+		`type S struct { A [1<<61]uint64 }`,
+		`type S struct { Buf [(1<<40)*(1<<30)]byte }`,
+	} {
+		st := parseStruct(t, src)
+		res, _ := s.Compute(nil, st.Fields, nil)
+		if !res.Unknown {
+			t.Fatalf("expected Unknown for overflowing array length in %q", src)
+		}
 	}
 }
 
