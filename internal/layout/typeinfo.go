@@ -226,7 +226,7 @@ func evalInt(expr ast.Expr) (int, bool) {
 		if e.Kind != token.INT {
 			return 0, false
 		}
-		n, err := strconv.ParseInt(e.Value, 0, 64)
+		n, err := strconv.ParseInt(e.Value, 0, 0)
 		if err != nil || n < 0 {
 			return 0, false
 		}
