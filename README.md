@@ -1,15 +1,17 @@
 # GoAlign
 
-A CLI tool for analyzing Go struct alignment issues, similar to [aligo](https://github.com/essentialkaos/aligo).
+A fast CLI for analyzing Go struct alignment and suggesting CPU-friendly field order
+(NATS / `govet/fieldalignment` style).
 
 ## Features
 
-- 🔍 **Struct Analysis**: Detects struct alignment issues that waste memory
-- 📊 **Multiple Output Formats**: Text, JSON, and table formats
-- 🚫 **Ignore Comments**: Support for `// goalign:ignore` comments
-- 📁 **Recursive Analysis**: Analyze entire directories
-- 🎯 **Severity Levels**: Categorizes issues by severity (high/medium/low)
-- 📈 **Detailed Reports**: Shows field sizes, offsets, and alignment info
+- **Struct analysis** — detects inter-field and trailing padding waste
+- **Suggested reorder** — atomics / 64-bit counters first, then density packing
+- **NATS-inspired rules** — `atomics-first` and `bool-pack` notes
+- **Zero-alloc layout math** — `layout.Compute` is allocation-free with a reused buffer
+- **Output formats** — text, JSON, table (streamed to stdout)
+- **Ignore comments** — `// goalign:ignore`
+- **Recursive scan** — parallel file analysis
 
 ## Installation
 
@@ -19,77 +21,69 @@ go install github.com/nekruzjm/goalign@latest
 
 ## Usage
 
-### Basic Analysis
-
 ```bash
 # Analyze current directory
 goalign analyze
 
-# Analyze specific file
+# Analyze a file
 goalign analyze main.go
 
-# Analyze directory recursively
-goalign analyze -r ./src
+# Recursive with excludes
+goalign analyze -r -e vendor/,testdata/ ./src
 
-# Exclude certain patterns
-goalign analyze -r -e vendor/,test/ ./src
-```
-
-### Output Formats
-
-```bash
-# Text format (default)
+# Formats
 goalign analyze -f text
-
-# JSON format
 goalign analyze -f json
-
-# Table format
 goalign analyze -f table
-```
-
-### Verbose Output
-
-```bash
-goalign analyze -v
 ```
 
 ## Example
 
-Given this struct with alignment issues:
+Given:
 
 ```go
 type BadStruct struct {
     A bool    // 1 byte
     B int64   // 8 bytes (7 bytes padding before)
     C int32   // 4 bytes
-    D bool    // 1 byte (3 bytes padding before)
+    D bool    // 1 byte (+ trailing pad)
 }
 ```
 
-GoAlign will report:
+GoAlign reports waste and a suggested order:
 
 ```
 📁 example.go
 ================
 
 🟡 BadStruct (line 1)
-   Struct 'BadStruct' has 10 bytes of padding (62% waste)
+   Struct 'BadStruct' has 10 bytes of padding (41% waste); reorder saves 8 bytes
    Fields:
      A bool (size: 1, offset: 0, align: 1)
      B int64 (size: 8, offset: 8, align: 8)
      C int32 (size: 4, offset: 16, align: 4)
      D bool (size: 1, offset: 20, align: 1)
+   Suggested order (saves 8 bytes):
+     B int64 (size: 8, offset: 0, align: 8)
+     C int32 (size: 4, offset: 8, align: 4)
+     A bool (size: 1, offset: 12, align: 1)
+     D bool (size: 1, offset: 13, align: 1)
 
-📊 Summary: 1 issues found, 10 bytes wasted
+📊 Summary: 1 issues found, 10 bytes wasted, 8 bytes savable by reorder
 ```
 
-## Ignoring Structs
+## NATS-inspired rules
 
-Add a comment to ignore specific structs:
+Practices taken from nats-server / nats.go hot structs:
+
+1. **Density packing** — larger align/size fields first (same idea as `govet/fieldalignment`)
+2. **Atomics first** — `int64` / `uint64` / `atomic.*` counters at the start of the struct
+   (64-bit alignment on 32-bit arches; matches nats.go `Conn` / server `client` layout)
+3. **Bool pack** — when 3+ bools are scattered among larger fields, notes a flag-word opportunity
+
+## Ignoring structs
 
 ```go
-// This struct is intentionally misaligned for compatibility
 // goalign:ignore
 type LegacyStruct struct {
     A bool
@@ -97,40 +91,36 @@ type LegacyStruct struct {
 }
 ```
 
-## GitHub Actions Integration
+## Performance
 
-Create `.github/workflows/goalign.yml`:
+Layout computation is designed for zero heap allocations when given a reused field buffer
+(validated with `testing.AllocsPerRun` / `b.ReportAllocs()`, same style as the nats wrapper):
 
-```yaml
-name: GoAlign
-on:
-  push:
-    branches: [ main, develop ]
-  pull_request:
-    branches: [ main ]
-
-jobs:
-  goalign:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-    - uses: actions/setup-go@v3
-      with:
-        go-version: '1.21'
-    - name: Install GoAlign
-      run: go install github.com/nekruzjm/goalign@latest
-    - name: Run GoAlign
-      run: goalign analyze -r .
+```bash
+go test ./internal/layout -bench=BenchmarkCompute -benchmem
+# BenchmarkCompute-…   0 B/op   0 allocs/op
 ```
 
-## Contributing
+## Development
 
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add some amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+```bash
+make test       # unit tests
+make test-race  # race detector
+make coverage   # coverage gate (COVERAGE_MIN=70)
+make bench      # critical benchmarks
+make fuzz       # fuzz smoke
+make ci         # fmt-check + test + race + vet + lint
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full PR checklist and CI job inventory.
+
+## Architecture notes
+
+- Fast **AST heuristics** (no `go/packages` by default) for scan speed
+- GOARCH-aware sizes (`amd64`/`arm64` vs `386`/`arm`)
+- Handles fixed arrays, anonymous nested structs, embeds, trailing struct padding
+- Named imported types still use pointer-sized heuristics (no type checker)
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License — see [LICENSE](LICENSE) for details.

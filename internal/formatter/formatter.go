@@ -2,95 +2,167 @@ package formatter
 
 import (
 	"encoding/json"
-	"fmt"
+	"io"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/nekruzjm/goalign/internal/analyzer"
+	"github.com/nekruzjm/goalign/internal/layout"
 )
 
-// Format formats the analysis results based on the specified format
-func Format(results []analyzer.Result, format string) (string, error) {
+// Format writes analysis results to w in the given format (text|table|json).
+func Format(w io.Writer, results []analyzer.Result, format string) error {
 	switch strings.ToLower(format) {
 	case "json":
-		return formatJSON(results)
+		return formatJSON(w, results)
 	case "table":
-		return formatTable(results), nil
-	case "text":
-		fallthrough
+		return formatTable(w, results)
 	default:
-		return formatText(results), nil
+		return formatText(w, results)
 	}
 }
 
-func formatText(results []analyzer.Result) string {
+func formatText(w io.Writer, results []analyzer.Result) error {
 	if len(results) == 0 {
-		return "No struct alignment issues found.\n"
+		_, err := io.WriteString(w, "No struct alignment issues found.\n")
+		return err
 	}
 
-	var output strings.Builder
+	var buf []byte
 	totalIssues := 0
 	totalWasted := 0
+	totalSaved := 0
 
 	for _, result := range results {
 		if len(result.Issues) == 0 {
 			continue
 		}
 
-		output.WriteString(fmt.Sprintf("\n📁 %s\n", result.File))
-		output.WriteString(strings.Repeat("=", len(result.File)+4) + "\n")
+		buf = append(buf, '\n')
+		buf = append(buf, []byte("📁 ")...)
+		buf = append(buf, result.File...)
+		buf = append(buf, '\n')
+		for i := 0; i < len(result.File)+4; i++ {
+			buf = append(buf, '=')
+		}
+		buf = append(buf, '\n')
 
 		for _, issue := range result.Issues {
 			totalIssues++
 			totalWasted += issue.Wasted
+			totalSaved += issue.Saved
 
-			severityIcon := getSeverityIcon(issue.Severity)
-			output.WriteString(fmt.Sprintf("%s %s (line %d)\n", severityIcon, issue.StructName, issue.Line))
-			output.WriteString(fmt.Sprintf("   %s\n", issue.Message))
+			buf = append(buf, getSeverityIcon(issue.Severity)...)
+			buf = append(buf, ' ')
+			buf = append(buf, issue.StructName...)
+			buf = append(buf, []byte(" (line ")...)
+			buf = strconv.AppendInt(buf, int64(issue.Line), 10)
+			buf = append(buf, ')', '\n')
+			buf = append(buf, []byte("   ")...)
+			buf = append(buf, issue.Message...)
+			buf = append(buf, '\n')
 
 			if len(issue.Fields) > 0 {
-				output.WriteString("   Fields:\n")
-				for _, field := range issue.Fields {
-					output.WriteString(fmt.Sprintf("     %s %s (size: %d, offset: %d, align: %d)\n",
-						field.Name, field.Type, field.Size, field.Offset, field.Align))
-				}
+				buf = append(buf, []byte("   Fields:\n")...)
+				buf = appendFields(buf, issue.Fields)
 			}
-			output.WriteString("\n")
+			if len(issue.Suggested) > 0 && issue.Saved > 0 {
+				buf = append(buf, []byte("   Suggested order")...)
+				if issue.Saved > 0 {
+					buf = append(buf, []byte(" (saves ")...)
+					buf = strconv.AppendInt(buf, int64(issue.Saved), 10)
+					buf = append(buf, []byte(" bytes)")...)
+				}
+				buf = append(buf, ':', '\n')
+				buf = appendFields(buf, issue.Suggested)
+			}
+			for _, note := range issue.Notes {
+				buf = append(buf, []byte("   note: ")...)
+				buf = append(buf, note...)
+				buf = append(buf, '\n')
+			}
+			buf = append(buf, '\n')
 		}
+
+		if _, err := w.Write(buf); err != nil {
+			return err
+		}
+		buf = buf[:0]
 	}
 
-	output.WriteString(fmt.Sprintf("\n📊 Summary: %d issues found, %d bytes wasted\n", totalIssues, totalWasted))
-	return output.String()
+	buf = append(buf, []byte("\n📊 Summary: ")...)
+	buf = strconv.AppendInt(buf, int64(totalIssues), 10)
+	buf = append(buf, []byte(" issues found, ")...)
+	buf = strconv.AppendInt(buf, int64(totalWasted), 10)
+	buf = append(buf, []byte(" bytes wasted")...)
+	if totalSaved > 0 {
+		buf = append(buf, []byte(", ")...)
+		buf = strconv.AppendInt(buf, int64(totalSaved), 10)
+		buf = append(buf, []byte(" bytes savable by reorder")...)
+	}
+	buf = append(buf, '\n')
+	_, err := w.Write(buf)
+	return err
 }
 
-func formatTable(results []analyzer.Result) string {
+func appendFields(buf []byte, fields []layout.Field) []byte {
+	for _, field := range fields {
+		buf = append(buf, []byte("     ")...)
+		buf = append(buf, field.Name...)
+		buf = append(buf, ' ')
+		buf = append(buf, field.Type...)
+		buf = append(buf, []byte(" (size: ")...)
+		buf = strconv.AppendInt(buf, int64(field.Size), 10)
+		buf = append(buf, []byte(", offset: ")...)
+		buf = strconv.AppendInt(buf, int64(field.Offset), 10)
+		buf = append(buf, []byte(", align: ")...)
+		buf = strconv.AppendInt(buf, int64(field.Align), 10)
+		buf = append(buf, ')', '\n')
+	}
+	return buf
+}
+
+func formatTable(w io.Writer, results []analyzer.Result) error {
 	if len(results) == 0 {
-		return "No struct alignment issues found.\n"
+		_, err := io.WriteString(w, "No struct alignment issues found.\n")
+		return err
 	}
 
-	var output strings.Builder
-	w := tabwriter.NewWriter(&output, 0, 0, 2, ' ', 0)
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	_, _ = io.WriteString(tw, "FILE\tSTRUCT\tLINE\tSEVERITY\tWASTED\tSAVED\tMESSAGE\n")
+	_, _ = io.WriteString(tw, "----\t------\t----\t--------\t------\t-----\t-------\n")
 
-	fmt.Fprintln(w, "FILE\tSTRUCT\tLINE\tSEVERITY\tWASTED\tMESSAGE")
-	fmt.Fprintln(w, "----\t------\t----\t--------\t------\t-------")
-
+	var line []byte
 	for _, result := range results {
 		for _, issue := range result.Issues {
-			fmt.Fprintf(w, "%s\t%s\t%d\t%s\t%d\t%s\n",
-				result.File, issue.StructName, issue.Line, issue.Severity, issue.Wasted, issue.Message)
+			line = line[:0]
+			line = append(line, result.File...)
+			line = append(line, '\t')
+			line = append(line, issue.StructName...)
+			line = append(line, '\t')
+			line = strconv.AppendInt(line, int64(issue.Line), 10)
+			line = append(line, '\t')
+			line = append(line, issue.Severity...)
+			line = append(line, '\t')
+			line = strconv.AppendInt(line, int64(issue.Wasted), 10)
+			line = append(line, '\t')
+			line = strconv.AppendInt(line, int64(issue.Saved), 10)
+			line = append(line, '\t')
+			line = append(line, issue.Message...)
+			line = append(line, '\n')
+			if _, err := tw.Write(line); err != nil {
+				return err
+			}
 		}
 	}
-
-	w.Flush()
-	return output.String()
+	return tw.Flush()
 }
 
-func formatJSON(results []analyzer.Result) (string, error) {
-	jsonData, err := json.MarshalIndent(results, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	return string(jsonData) + "\n", nil
+func formatJSON(w io.Writer, results []analyzer.Result) error {
+	enc := json.NewEncoder(w)
+	enc.SetIndent("", "  ")
+	return enc.Encode(results)
 }
 
 func getSeverityIcon(severity string) string {
@@ -101,6 +173,8 @@ func getSeverityIcon(severity string) string {
 		return "🟡"
 	case "low":
 		return "🟢"
+	case "info":
+		return "ℹ️"
 	default:
 		return "⚪"
 	}

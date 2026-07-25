@@ -24,6 +24,7 @@ memory usage, and ensure data integrity.`,
 	Version: version,
 }
 
+// Execute runs the root command.
 func Execute() {
 	err := rootCmd.Execute()
 	if err != nil {
