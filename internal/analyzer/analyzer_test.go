@@ -103,6 +103,23 @@ type S struct {
 	}
 }
 
+func TestAnalyzeSkipsUnknownArrayLen(t *testing.T) {
+	src := []byte(`package p
+type S struct {
+	A [N]byte
+	B bool
+	C int64
+}
+`)
+	res, err := analyzer.AnalyzeSource("x.go", src, layout.SizerFor("amd64"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Issues) != 0 {
+		t.Fatalf("expected skip for unknown array len, got %+v", res.Issues)
+	}
+}
+
 func BenchmarkAnalyzeFile(b *testing.B) {
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {

@@ -14,22 +14,18 @@ type SuggestResult struct {
 // Suggest reorders fields: atomic/64-bit counters first (NATS), then density
 // sort (align desc, size desc). Writes into dst when capacity allows.
 // originalWasted is used to compute Saved.
+//
+// Scratch: when dst has capacity >= 2*n, the second half is used as sort scratch
+// so Suggest avoids heap allocations for the partition/sort buffers.
 func Suggest(dst []Field, fields []Field, originalWasted int) SuggestResult {
 	n := len(fields)
 	if n == 0 {
 		return SuggestResult{Fields: dst[:0]}
 	}
 
-	// Work on a copy of indices to avoid mutating caller's Fields.
-	type item struct {
-		f      Field
-		atomic bool
-	}
-	items := make([]item, n)
 	atomicCount := 0
 	boolCount := 0
-	for i, f := range fields {
-		items[i] = item{f: f, atomic: f.IsAtomic()}
+	for _, f := range fields {
 		if f.IsAtomic() {
 			atomicCount++
 		}
@@ -38,35 +34,41 @@ func Suggest(dst []Field, fields []Field, originalWasted int) SuggestResult {
 		}
 	}
 
-	// Stable partition: atomics first, preserving relative order within groups,
-	// then density-sort non-atomics; atomics themselves density-sorted too.
-	atomics := make([]Field, 0, atomicCount)
-	rest := make([]Field, 0, n-atomicCount)
-	for _, it := range items {
-		if it.atomic {
-			atomics = append(atomics, it.f)
+	// Prefer in-place partition into dst[0:n], using dst[n:2n] as scratch when available.
+	var out []Field
+	var scratch []Field
+	if cap(dst) >= 2*n {
+		out = dst[:n]
+		scratch = dst[n : 2*n]
+	} else if cap(dst) >= n {
+		out = dst[:n]
+		scratch = make([]Field, n)
+	} else {
+		out = make([]Field, n)
+		scratch = make([]Field, n)
+	}
+
+	// Stable partition into scratch: atomics first, then rest (preserve relative order).
+	ai, ri := 0, atomicCount
+	for _, f := range fields {
+		if f.IsAtomic() {
+			scratch[ai] = f
+			ai++
 		} else {
-			rest = append(rest, it.f)
+			scratch[ri] = f
+			ri++
 		}
 	}
-	densitySort(atomics)
-	densitySort(rest)
+	densitySort(scratch[:atomicCount])
+	densitySort(scratch[atomicCount:n])
 
-	ordered := make([]Field, 0, n)
-	ordered = append(ordered, atomics...)
-	ordered = append(ordered, rest...)
-
-	// Relayout
+	// Relayout into out (also apply zero-size trailing rule).
 	total := 0
 	wasted := 0
 	maxAlign := 1
-	out := dst
-	if cap(out) < n {
-		out = make([]Field, n)
-	} else {
-		out = out[:n]
-	}
-	for i, f := range ordered {
+	lastSize := 0
+	for i := 0; i < n; i++ {
+		f := scratch[i]
 		if f.Align > maxAlign {
 			maxAlign = f.Align
 		}
@@ -75,6 +77,11 @@ func Suggest(dst []Field, fields []Field, originalWasted int) SuggestResult {
 		f.Offset = total + pad
 		out[i] = f
 		total = f.Offset + f.Size
+		lastSize = f.Size
+	}
+	if n > 0 && lastSize == 0 && total > 0 {
+		total++
+		wasted++
 	}
 	trail := alignPad(total, maxAlign)
 	wasted += trail
@@ -85,7 +92,7 @@ func Suggest(dst []Field, fields []Field, originalWasted int) SuggestResult {
 		saved = 0
 	}
 
-	notes := ruleNotes(fields, ordered, atomicCount, boolCount, originalWasted)
+	notes := ruleNotes(fields, atomicCount, boolCount, originalWasted)
 	return SuggestResult{
 		Fields: out,
 		Total:  total,
@@ -104,7 +111,7 @@ func densitySort(fields []Field) {
 	})
 }
 
-func ruleNotes(original, suggested []Field, atomicCount, boolCount, wasted int) []string {
+func ruleNotes(original []Field, atomicCount, boolCount, wasted int) []string {
 	var notes []string
 
 	if atomicCount > 0 && !atomicsAreLeading(original) {
@@ -115,7 +122,6 @@ func ruleNotes(original, suggested []Field, atomicCount, boolCount, wasted int) 
 		notes = append(notes, "bool-pack: 3+ bools with intervening padding — consider a flag word or bitfield")
 	}
 
-	_ = suggested
 	return notes
 }
 

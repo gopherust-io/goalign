@@ -28,8 +28,14 @@ goalign analyze
 # Analyze a file
 goalign analyze main.go
 
-# Recursive with excludes
-goalign analyze -r -e vendor/,testdata/ ./src
+# Recursive with excludes (vendor/.git/node_modules/bin are skipped by default)
+goalign analyze -r -e testdata/ ./src
+
+# Target a specific GOARCH
+goalign analyze --arch=386 ./pkg
+
+# CI gate: fail if any issue wastes >= 8 bytes
+goalign analyze -r --fail-on-findings --min-waste=8 .
 
 # Formats
 goalign analyze -f text
@@ -117,8 +123,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full PR checklist and CI job inve
 ## Architecture notes
 
 - Fast **AST heuristics** (no `go/packages` by default) for scan speed
-- GOARCH-aware sizes (`amd64`/`arm64` vs `386`/`arm`)
-- Handles fixed arrays, anonymous nested structs, embeds, trailing struct padding
+- `--arch` selects GOARCH size tables (`amd64`/`arm64`/`386`/`arm`)
+- Handles fixed arrays (including `1<<n` lengths), anonymous nested structs, embeds, trailing padding, and trailing zero-sized fields (gc ABI)
+- Unresolvable array lengths (named consts) are skipped to avoid false positives
 - Named imported types still use pointer-sized heuristics (no type checker)
 
 ## License

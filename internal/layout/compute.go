@@ -7,15 +7,16 @@ import (
 
 // Result is the layout computation output for one struct.
 type Result struct {
-	N        int // number of fields written to dst
-	Total    int // total size including trailing padding
-	Wasted   int // inter-field + trailing padding bytes
-	MaxAlign int
+	N        int  // number of fields written to dst
+	Total    int  // total size including trailing padding
+	Wasted   int  // inter-field + trailing padding bytes
+	MaxAlign int  // struct alignment
+	Unknown  bool // true if a field type/size could not be resolved
 }
 
 // Compute lays out fields into dst without allocating when dst has capacity.
 // Type display strings are left empty; call FillTypeNames if needed for output.
-// Returns how many fields were written and layout metrics.
+// If any field type is Unknown, Unknown is set and metrics should not be trusted for reporting.
 func (s Sizer) Compute(dst []Field, fields *ast.FieldList) (Result, []Field) {
 	if fields == nil {
 		return Result{MaxAlign: 1}, dst[:0]
@@ -25,22 +26,35 @@ func (s Sizer) Compute(dst []Field, fields *ast.FieldList) (Result, []Field) {
 	total := 0
 	wasted := 0
 	maxAlign := 1
+	lastSize := 0
 
 	for _, f := range fields.List {
 		info := s.TypeInfo(f.Type)
+		if info.IsUnknown() {
+			return Result{Unknown: true, MaxAlign: 1}, dst[:0]
+		}
 		if info.Align > maxAlign {
 			maxAlign = info.Align
 		}
 		flags := classifyFlags(f.Type, info)
 
 		if len(f.Names) == 0 {
-			// Embedded field — write once without allocating an Ident slice.
 			n, total, wasted, dst = appendField(dst, n, total, wasted, embedName(f.Type), info, flags)
+			lastSize = info.Size
 			continue
 		}
 		for _, name := range f.Names {
 			n, total, wasted, dst = appendField(dst, n, total, wasted, name.Name, info, flags)
+			lastSize = info.Size
 		}
+	}
+
+	// gc ABI: if the last field is zero-sized and the struct already has
+	// non-zero size, add one byte so &lastField stays inside the object.
+	// All-zero-sized structs stay size 0 (matches unsafe.Sizeof).
+	if n > 0 && lastSize == 0 && total > 0 {
+		total++
+		wasted++
 	}
 
 	trail := alignPad(total, maxAlign)

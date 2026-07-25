@@ -109,6 +109,42 @@ func TestComputeGolden(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "trailing_zero_sized",
+			src: `type S struct {
+				X int64
+				Y struct{}
+			}`,
+			wantN: 2, wantTotal: 16, wantWasted: 8,
+		},
+		{
+			name: "only_zero_sized",
+			src: `type S struct {
+				Y struct{}
+			}`,
+			wantN: 1, wantTotal: 0, wantWasted: 0,
+		},
+		{
+			name: "array_shift_len",
+			src: `type S struct {
+				A [1<<3]byte
+				B bool
+			}`,
+			wantN: 2, wantTotal: 9, wantWasted: 0,
+			check: func(t *testing.T, fields []layout.Field) {
+				t.Helper()
+				if fields[0].Size != 8 {
+					t.Fatalf("array size=%d want 8", fields[0].Size)
+				}
+			},
+		},
+		{
+			name: "zero_array_only",
+			src: `type S struct {
+				Z [0]byte
+			}`,
+			wantN: 1, wantTotal: 0, wantWasted: 0,
+		},
 	}
 
 	s := layout.SizerFor("amd64")
@@ -150,6 +186,42 @@ func TestComputeNoAlloc(t *testing.T) {
 	})
 	if allocs != 0 {
 		t.Fatalf("Compute allocs/op = %v, want 0", allocs)
+	}
+}
+
+func TestUnknownArrayLen(t *testing.T) {
+	t.Parallel()
+	st := parseStruct(t, `type S struct {
+		A [N]byte
+		B int64
+	}`)
+	s := layout.SizerFor("amd64")
+	res, _ := s.Compute(nil, st.Fields)
+	if !res.Unknown {
+		t.Fatal("expected Unknown for named const array length")
+	}
+}
+
+func TestSuggestNoAlloc(t *testing.T) {
+	st := parseStruct(t, `type S struct {
+		A bool
+		B int64
+		C int32
+		D bool
+	}`)
+	s := layout.SizerFor("amd64")
+	_, fields := s.Compute(nil, st.Fields)
+	dst := make([]layout.Field, 2*len(fields))
+
+	// Warmup + ensure Suggest works with a reused 2*n buffer (no grow).
+	_ = layout.Suggest(dst[:0], fields, 10)
+	sug := layout.Suggest(dst[:0], fields, 10)
+	if len(sug.Fields) != len(fields) {
+		t.Fatalf("len=%d want %d", len(sug.Fields), len(fields))
+	}
+	// Cap must remain shared with dst (no realloc of the result slice).
+	if cap(sug.Fields) < 2*len(fields) {
+		t.Fatalf("cap=%d want >= %d (reused dst)", cap(sug.Fields), 2*len(fields))
 	}
 }
 

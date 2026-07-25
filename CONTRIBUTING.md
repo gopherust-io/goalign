@@ -26,6 +26,8 @@ make run-examples  # build and analyze examples/
 4. Update `README.md` when changing CLI flags or analysis rules.
 5. Do not commit secrets.
 
+Useful CLI flags for CI: `--fail-on-findings`, `--min-waste=N`, `--arch=amd64`.
+
 ## CI
 
 On PRs and `main`/`master`, GitHub Actions runs:

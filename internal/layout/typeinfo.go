@@ -6,8 +6,15 @@ import (
 	"strconv"
 )
 
+// Unknown marks a type whose size cannot be determined from the AST alone.
+var Unknown = Info{Size: -1, Align: -1}
+
+// IsUnknown reports whether size/align could not be resolved.
+func (i Info) IsUnknown() bool { return i.Size < 0 }
+
 // TypeInfo returns size and alignment for an AST type expression without
 // allocating type-name strings. Named/unknown types default to a pointer.
+// Unresolvable array lengths return Unknown (Size < 0).
 func (s Sizer) TypeInfo(expr ast.Expr) Info {
 	if expr == nil {
 		return s.ptr()
@@ -22,10 +29,18 @@ func (s Sizer) TypeInfo(expr ast.Expr) Info {
 			// slice header: ptr + len + cap
 			return Info{Size: 3 * s.PtrSize, Align: s.PtrSize}
 		}
-		n := arrayLen(t.Len)
+		n, ok := evalInt(t.Len)
 		elem := s.TypeInfo(t.Elt)
-		if n < 0 || elem.Size < 0 {
-			return s.ptr()
+		if !ok || elem.IsUnknown() {
+			return Unknown
+		}
+		if n == 0 {
+			// [0]T has size 0 but keeps element alignment.
+			align := elem.Align
+			if align < 1 {
+				align = 1
+			}
+			return Info{Size: 0, Align: align}
 		}
 		return Info{Size: n * elem.Size, Align: elem.Align}
 	case *ast.StructType:
@@ -73,7 +88,6 @@ func (s Sizer) identInfo(name string) Info {
 }
 
 func (s Sizer) selectorInfo(sel *ast.SelectorExpr) Info {
-	// sync/atomic types and common packages.
 	pkg := ""
 	if id, ok := sel.X.(*ast.Ident); ok {
 		pkg = id.Name
@@ -93,13 +107,17 @@ func (s Sizer) selectorInfo(sel *ast.SelectorExpr) Info {
 }
 
 func (s Sizer) structInfo(st *ast.StructType) Info {
-	if st.Fields == nil {
+	if st.Fields == nil || len(st.Fields.List) == 0 {
 		return Info{Size: 0, Align: 1}
 	}
 	total := 0
 	maxAlign := 1
+	lastSize := 0
 	for _, f := range st.Fields.List {
 		info := s.TypeInfo(f.Type)
+		if info.IsUnknown() {
+			return Unknown
+		}
 		if info.Align > maxAlign {
 			maxAlign = info.Align
 		}
@@ -107,7 +125,12 @@ func (s Sizer) structInfo(st *ast.StructType) Info {
 		for i := 0; i < n; i++ {
 			pad := alignPad(total, info.Align)
 			total += pad + info.Size
+			lastSize = info.Size
 		}
+	}
+	// gc ABI: trailing zero-sized field in a non-empty struct.
+	if lastSize == 0 && total > 0 {
+		total++
 	}
 	total += alignPad(total, maxAlign)
 	if maxAlign < 1 {
@@ -123,22 +146,84 @@ func fieldNameCount(f *ast.Field) int {
 	return len(f.Names)
 }
 
-func arrayLen(expr ast.Expr) int {
+// evalInt evaluates a simple integer constant expression used as an array length.
+// Returns ok=false when the expression cannot be resolved without go/types.
+func evalInt(expr ast.Expr) (int, bool) {
 	switch e := expr.(type) {
 	case *ast.BasicLit:
-		if e.Kind == token.INT {
-			n, err := strconv.Atoi(e.Value)
-			if err == nil {
-				return n
+		if e.Kind != token.INT {
+			return 0, false
+		}
+		n, err := strconv.ParseInt(e.Value, 0, 64)
+		if err != nil || n < 0 {
+			return 0, false
+		}
+		return int(n), true
+	case *ast.ParenExpr:
+		return evalInt(e.X)
+	case *ast.UnaryExpr:
+		v, ok := evalInt(e.X)
+		if !ok {
+			return 0, false
+		}
+		switch e.Op {
+		case token.ADD:
+			return v, true
+		case token.SUB:
+			return -v, true
+		case token.XOR:
+			return ^v, true
+		default:
+			return 0, false
+		}
+	case *ast.BinaryExpr:
+		l, ok1 := evalInt(e.X)
+		r, ok2 := evalInt(e.Y)
+		if !ok1 || !ok2 {
+			return 0, false
+		}
+		switch e.Op {
+		case token.ADD:
+			return l + r, true
+		case token.SUB:
+			return l - r, true
+		case token.MUL:
+			return l * r, true
+		case token.QUO:
+			if r == 0 {
+				return 0, false
 			}
+			return l / r, true
+		case token.REM:
+			if r == 0 {
+				return 0, false
+			}
+			return l % r, true
+		case token.SHL:
+			if r < 0 || r > 62 {
+				return 0, false
+			}
+			return l << uint(r), true
+		case token.SHR:
+			if r < 0 || r > 62 {
+				return 0, false
+			}
+			return l >> uint(r), true
+		case token.AND:
+			return l & r, true
+		case token.OR:
+			return l | r, true
+		case token.XOR:
+			return l ^ r, true
+		default:
+			return 0, false
 		}
 	case *ast.Ident:
-		// named const — unknown without types; treat as 1
-		return 1
-	case *ast.ParenExpr:
-		return arrayLen(e.X)
+		// Named const — unknown without types.
+		return 0, false
+	default:
+		return 0, false
 	}
-	return -1
 }
 
 func alignPad(offset, align int) int {

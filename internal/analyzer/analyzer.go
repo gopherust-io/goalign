@@ -58,9 +58,13 @@ func AnalyzeSource(filename string, content []byte, sizer layout.Sizer) (Result,
 		return result, err
 	}
 
-	cmap := ast.NewCommentMap(fileSet, node, node.Comments)
+	var cmap ast.CommentMap
+	if len(node.Comments) > 0 {
+		cmap = ast.NewCommentMap(fileSet, node, node.Comments)
+	}
 	fieldBuf := make([]layout.Field, 0, 16)
-	suggestBuf := make([]layout.Field, 0, 16)
+	// Suggest needs capacity >= 2*n for zero-alloc partition scratch.
+	suggestBuf := make([]layout.Field, 0, 32)
 
 	ast.Inspect(node, func(n ast.Node) bool {
 		gd, ok := n.(*ast.GenDecl)
@@ -84,6 +88,9 @@ func AnalyzeSource(filename string, content []byte, sizer layout.Sizer) (Result,
 			res, fields := sizer.Compute(fieldBuf[:0], st.Fields)
 			fieldBuf = fields[:cap(fields)]
 
+			if res.Unknown {
+				continue // unresolvable sizes — avoid false positives
+			}
 			if !layout.NeedsReport(res.Wasted, fields) {
 				continue
 			}
@@ -96,14 +103,7 @@ func AnalyzeSource(filename string, content []byte, sizer layout.Sizer) (Result,
 			suggestBuf = sug.Fields[:cap(sug.Fields)]
 			suggestedOwned := make([]layout.Field, len(sug.Fields))
 			copy(suggestedOwned, sug.Fields)
-			for i := range suggestedOwned {
-				for _, f := range owned {
-					if f.Name == suggestedOwned[i].Name {
-						suggestedOwned[i].Type = f.Type
-						break
-					}
-				}
-			}
+			// Type strings already present on Field after FillTypeNames + Suggest copy.
 
 			line := fileSet.Position(ts.Pos()).Line
 			msg := buildMessage(ts.Name.Name, res.Wasted, res.Total, sug.Saved, sug.Notes)
@@ -151,6 +151,9 @@ func genDeclIgnored(gd *ast.GenDecl, cmap ast.CommentMap) bool {
 			}
 		}
 	}
+	if cmap == nil {
+		return false
+	}
 	for _, cg := range cmap[gd] {
 		for _, c := range cg.List {
 			if strings.Contains(c.Text, "goalign:ignore") {
@@ -168,6 +171,9 @@ func hasIgnoreComment(typeSpec *ast.TypeSpec, cmap ast.CommentMap) bool {
 				return true
 			}
 		}
+	}
+	if cmap == nil {
+		return false
 	}
 	for _, cg := range cmap[typeSpec] {
 		for _, c := range cg.List {
