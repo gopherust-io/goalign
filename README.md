@@ -130,4 +130,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full PR checklist and CI job inve
 
 ## License
 
-This project is licensed under the MIT License — see [LICENSE](LICENSE) for details.
+Apache License 2.0 — see [LICENSE](LICENSE).
+
