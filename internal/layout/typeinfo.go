@@ -259,11 +259,23 @@ func evalInt(expr ast.Expr) (int, bool) {
 		}
 		switch e.Op {
 		case token.ADD:
-			return l + r, true
+			sum, carry := bits.Add(uint(l), uint(r), 0)
+			if carry != 0 {
+				return 0, false
+			}
+			return int(sum), true
 		case token.SUB:
-			return l - r, true
+			diff, borrow := bits.Sub(uint(l), uint(r), 0)
+			if borrow != 0 {
+				return 0, false
+			}
+			return int(diff), true
 		case token.MUL:
-			return l * r, true
+			hi, lo := bits.Mul(uint(l), uint(r))
+			if hi != 0 {
+				return 0, false
+			}
+			return int(lo), true
 		case token.QUO:
 			if r == 0 {
 				return 0, false
@@ -275,12 +287,15 @@ func evalInt(expr ast.Expr) (int, bool) {
 			}
 			return l % r, true
 		case token.SHL:
-			if r < 0 || r > 62 {
+			if r < 0 || r >= bits.UintSize {
+				return 0, false
+			}
+			if l != 0 && r >= bits.LeadingZeros(uint(l)) {
 				return 0, false
 			}
 			return l << uint(r), true
 		case token.SHR:
-			if r < 0 || r > 62 {
+			if r < 0 || r >= bits.UintSize {
 				return 0, false
 			}
 			return l >> uint(r), true

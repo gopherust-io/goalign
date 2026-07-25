@@ -4,8 +4,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 )
@@ -45,28 +47,9 @@ Can read from file or stdin.`,
 			return fmt.Errorf("failed to decode hex: %w", err)
 		}
 
-		// Handle gRPC framing (first 5 bytes may be frame header)
-		var messageBytes []byte
-		if len(bytes) >= 5 {
-			// Check if first bytes look like gRPC frame header
-			// Format: [compression_flag(1)] [message_length(4 big-endian)]
-			compressionFlag := bytes[0]
-			if compressionFlag == 0x00 {
-				// Read message length (big-endian, 4 bytes)
-				messageLength := int(bytes[1])<<24 | int(bytes[2])<<16 | int(bytes[3])<<8 | int(bytes[4])
-				if messageLength > 0 && messageLength < len(bytes)-5 && messageLength < 1000000 {
-					// Valid-looking frame header, skip it
-					messageBytes = bytes[5 : 5+messageLength]
-				} else {
-					// Invalid frame header, try parsing from byte 5 onwards
-					messageBytes = bytes[5:]
-				}
-			} else {
-				// No frame header, use all bytes
-				messageBytes = bytes
-			}
-		} else {
-			messageBytes = bytes
+		messageBytes, err := messageBytesFromFrame(bytes)
+		if err != nil {
+			return err
 		}
 
 		// Decode protobuf wire format
@@ -85,6 +68,26 @@ Can read from file or stdin.`,
 
 func init() {
 	rootCmd.AddCommand(grpcDecodeCmd)
+}
+
+// messageBytesFromFrame strips an uncompressed gRPC frame header when present.
+// Compressed frames are rejected only when the 5-byte header looks like a real
+// gRPC frame; otherwise the payload is treated as raw protobuf.
+func messageBytesFromFrame(bytes []byte) ([]byte, error) {
+	if len(bytes) < 5 {
+		return bytes, nil
+	}
+	compressionFlag := bytes[0]
+	messageLength := int(bytes[1])<<24 | int(bytes[2])<<16 | int(bytes[3])<<8 | int(bytes[4])
+	validFrame := messageLength > 0 && messageLength < 1000000 && 5+messageLength <= len(bytes)
+	switch {
+	case compressionFlag == 1 && validFrame:
+		return nil, fmt.Errorf("compressed gRPC frames are not supported (flag=0x%02x)", compressionFlag)
+	case compressionFlag == 0 && validFrame:
+		return bytes[5 : 5+messageLength], nil
+	default:
+		return bytes, nil
+	}
 }
 
 func cleanHexData(hexData string) string {
@@ -166,11 +169,14 @@ func parseProtobufFields(data []byte) []map[string]interface{} {
 			break
 		}
 
-		// Read tag (field number and wire type)
-		tag := int(data[pos])
-		fieldNum := tag >> 3
-		wireType := tag & 0x07
-		pos++
+		// Read tag as a protobuf varint (field number + wire type).
+		tag, newPos := decodeVarint(data, pos)
+		if newPos == pos {
+			break
+		}
+		pos = newPos
+		fieldNum := int(tag >> 3)
+		wireType := int(tag & 0x07)
 
 		if fieldNum == 0 {
 			// Field number 0 is invalid, might be padding or end of message
@@ -201,49 +207,55 @@ func parseProtobufFields(data []byte) []map[string]interface{} {
 			if pos < len(data) {
 				length, newPos := decodeVarint(data, pos)
 				pos = newPos
-				if length > 0 && pos+int(length) <= len(data) {
-					bytes := data[pos : pos+int(length)]
-
-					// Heuristic: check if this looks like a nested message
-					// A message should start with a valid field tag (field_num > 0, wire_type valid)
-					fieldNum := int(bytes[0]) >> 3
-					wireType := int(bytes[0]) & 0x07
-					isLikelyMessage := len(bytes) > 1 &&
-						wireType <= 5 && // Valid wire type
-						fieldNum > 0 && // Valid field number
-						fieldNum < 536870912 // Reasonable field number (2^29-1)
-
-					var nested []map[string]interface{}
-					if isLikelyMessage {
-						nested = parseProtobufFields(bytes)
-						// Only use as nested message if we got reasonable results
-						if len(nested) > 0 && len(nested) < 100 && looksLikeValidProtobuf(nested) {
-							field["nested_message"] = nested
-							field["value_type"] = "message"
-							field["raw_hex"] = hex.EncodeToString(bytes)
-						} else {
-							// Failed as message, treat as string/bytes
-							isLikelyMessage = false
-						}
-					}
-
-					if !isLikelyMessage || len(nested) == 0 {
-						// Not a nested message, try to decode as string
-						if isValidUTF8(bytes) || isPrintable(bytes) {
-							// Try to decode UTF-8
-							field["value"] = string(bytes)
-							field["value_type"] = "string"
-							field["hex"] = hex.EncodeToString(bytes)
-						} else {
-							field["value"] = hex.EncodeToString(bytes)
-							field["value_type"] = "bytes"
-						}
-					}
-
-					pos += int(length)
-				} else {
+				if length == 0 {
+					field["value"] = ""
+					field["value_type"] = "string"
+					fields = append(fields, field)
+					continue
+				}
+				if length > uint64(math.MaxInt) || pos > len(data) || int(length) > len(data)-pos {
 					goto end
 				}
+				bytes := data[pos : pos+int(length)]
+
+				// Heuristic: check if this looks like a nested message
+				// A message should start with a valid field tag (field_num > 0, wire_type valid)
+				fieldNum := int(bytes[0]) >> 3
+				wireType := int(bytes[0]) & 0x07
+				isLikelyMessage := len(bytes) > 1 &&
+					wireType <= 5 && // Valid wire type
+					fieldNum > 0 && // Valid field number
+					fieldNum < 536870912 // Reasonable field number (2^29-1)
+
+				var nested []map[string]interface{}
+				if isLikelyMessage {
+					nested = parseProtobufFields(bytes)
+					// Only use as nested message if we got reasonable results
+					if len(nested) > 0 && len(nested) < 100 && looksLikeValidProtobuf(nested) {
+						field["nested_message"] = nested
+						field["value_type"] = "message"
+						field["raw_hex"] = hex.EncodeToString(bytes)
+					} else {
+						// Failed as message, treat as string/bytes
+						isLikelyMessage = false
+					}
+				}
+
+				if !isLikelyMessage || len(nested) == 0 {
+					// Not a nested message, try to decode as string
+					if isValidUTF8(bytes) || isPrintable(bytes) {
+						field["value"] = string(bytes)
+						field["value_type"] = "string"
+						field["hex"] = hex.EncodeToString(bytes)
+					} else {
+						field["value"] = hex.EncodeToString(bytes)
+						field["value_type"] = "bytes"
+					}
+				}
+
+				pos += int(length)
+			} else {
+				goto end
 			}
 		case 5: // 32-bit
 			if pos+4 <= len(data) {
@@ -314,7 +326,7 @@ func isPrintable(data []byte) bool {
 }
 
 func isValidUTF8(data []byte) bool {
-	return len(data) > 0 && (len(data) > 3 || len(data) == len([]rune(string(data))))
+	return utf8.Valid(data)
 }
 
 func looksLikeValidProtobuf(fields []map[string]interface{}) bool {
