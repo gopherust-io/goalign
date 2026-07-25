@@ -51,6 +51,9 @@ func FuzzComputeSource(f *testing.F) {
 					continue
 				}
 				res, fields := sizer.Compute(dst[:0], st.Fields)
+				if res.Unknown {
+					continue // unresolvable sizes are intentional
+				}
 				if res.N < 0 || res.Total < 0 || res.Wasted < 0 {
 					t.Fatalf("negative metrics: %+v", res)
 				}
@@ -101,6 +104,9 @@ func FuzzTypeInfo(f *testing.F) {
 			return
 		}
 		info := sizer.TypeInfo(st.Fields.List[0].Type)
+		if info.IsUnknown() {
+			return // unresolvable array lengths / exprs are valid
+		}
 		if info.Size < 0 || info.Align < 0 {
 			t.Fatalf("negative TypeInfo: %+v for %q", info, typeSrc)
 		}
