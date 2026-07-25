@@ -5,6 +5,9 @@ import (
 	"go/token"
 	"math/bits"
 	"strconv"
+
+	"github.com/gopherust-io/goalign/internal/alignmath"
+	"github.com/gopherust-io/goalign/internal/goarch"
 )
 
 // Unknown marks a type whose size cannot be determined from the AST alone.
@@ -14,14 +17,8 @@ var Unknown = Info{Size: -1, Align: -1}
 func (i Info) IsUnknown() bool { return i.Size < 0 }
 
 // ValidArch reports whether goarch is a known GOARCH for SizerFor.
-func ValidArch(goarch string) bool {
-	switch goarch {
-	case "386", "amd64", "arm", "arm64", "mips", "mipsle", "mips64", "mips64le",
-		"ppc", "ppc64", "ppc64le", "riscv", "riscv64", "s390x", "wasm":
-		return true
-	default:
-		return false
-	}
+func ValidArch(name string) bool {
+	return goarch.Valid(name)
 }
 
 // TypeInfo returns size and alignment for an AST type expression.
@@ -143,8 +140,10 @@ func (s Sizer) structInfo(st *ast.StructType, locals map[string]Info) Info {
 		return Info{Size: 0, Align: 1}
 	}
 	total := 0
+	wasted := 0
 	maxAlign := 1
 	lastSize := 0
+	fieldCount := 0
 	for _, f := range st.Fields.List {
 		info := s.TypeInfo(f.Type, locals)
 		if info.IsUnknown() {
@@ -155,18 +154,12 @@ func (s Sizer) structInfo(st *ast.StructType, locals map[string]Info) Info {
 		}
 		n := fieldNameCount(f)
 		for i := 0; i < n; i++ {
-			pad := alignPad(total, info.Align)
-			total += pad + info.Size
+			total, wasted, _ = alignmath.AddField(total, wasted, info.Size, info.Align)
 			lastSize = info.Size
+			fieldCount++
 		}
 	}
-	if lastSize == 0 && total > 0 {
-		total++
-	}
-	total += alignPad(total, maxAlign)
-	if maxAlign < 1 {
-		maxAlign = 1
-	}
+	total, _, maxAlign = alignmath.Finish(total, wasted, maxAlign, lastSize, fieldCount)
 	return Info{Size: total, Align: maxAlign}
 }
 
@@ -313,11 +306,4 @@ func evalInt(expr ast.Expr) (int, bool) {
 	default:
 		return 0, false
 	}
-}
-
-func alignPad(offset, align int) int {
-	if align <= 1 {
-		return 0
-	}
-	return (align - (offset % align)) % align
 }

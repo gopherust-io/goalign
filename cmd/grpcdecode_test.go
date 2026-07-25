@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"testing"
+	"unicode/utf8"
 )
 
 func TestDecodeVarintTagField16(t *testing.T) {
@@ -20,10 +21,10 @@ func TestDecodeVarintTagField16(t *testing.T) {
 }
 
 func TestIsValidUTF8(t *testing.T) {
-	if !isValidUTF8([]byte("hi")) {
+	if !utf8.Valid([]byte("hi")) {
 		t.Fatal("ascii should be valid utf8")
 	}
-	if isValidUTF8([]byte{0xff, 0xfe, 0xfd}) {
+	if utf8.Valid([]byte{0xff, 0xfe, 0xfd}) {
 		t.Fatal("invalid bytes should not be valid utf8")
 	}
 }

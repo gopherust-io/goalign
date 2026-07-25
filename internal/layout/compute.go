@@ -3,6 +3,8 @@ package layout
 import (
 	"go/ast"
 	"go/token"
+
+	"github.com/gopherust-io/goalign/internal/alignmath"
 )
 
 // Result is the layout computation output for one struct.
@@ -52,25 +54,13 @@ func (s Sizer) Compute(dst []Field, fields *ast.FieldList, locals map[string]Inf
 	// gc ABI: if the last field is zero-sized and the struct already has
 	// non-zero size, add one byte so &lastField stays inside the object.
 	// All-zero-sized structs stay size 0 (matches unsafe.Sizeof).
-	if n > 0 && lastSize == 0 && total > 0 {
-		total++
-		wasted++
-	}
-
-	trail := alignPad(total, maxAlign)
-	wasted += trail
-	total += trail
-	if maxAlign < 1 {
-		maxAlign = 1
-	}
+	total, wasted, maxAlign = alignmath.Finish(total, wasted, maxAlign, lastSize, n)
 
 	return Result{N: n, Total: total, Wasted: wasted, MaxAlign: maxAlign}, dst[:n]
 }
 
 func appendField(dst []Field, n, total, wasted int, name string, info Info, flags FieldFlags) (int, int, int, []Field) {
-	pad := alignPad(total, info.Align)
-	wasted += pad
-	offset := total + pad
+	total, wasted, offset := alignmath.AddField(total, wasted, info.Size, info.Align)
 	f := Field{
 		Name:   name,
 		Size:   info.Size,
@@ -87,7 +77,6 @@ func appendField(dst []Field, n, total, wasted int, name string, info Info, flag
 		dst = append(dst, f)
 	}
 	n++
-	total = offset + info.Size
 	return n, total, wasted, dst
 }
 

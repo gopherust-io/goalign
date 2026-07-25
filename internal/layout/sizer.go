@@ -1,6 +1,10 @@
 package layout
 
-import "runtime"
+import (
+	"runtime"
+
+	"github.com/gopherust-io/goalign/internal/goarch"
+)
 
 // Sizer provides architecture-aware sizes and alignments for Go types.
 type Sizer struct {
@@ -13,13 +17,8 @@ func DefaultSizer() Sizer {
 }
 
 // SizerFor returns a Sizer for the given GOARCH string.
-func SizerFor(goarch string) Sizer {
-	switch goarch {
-	case "386", "arm", "mips", "mipsle", "ppc", "riscv", "wasm":
-		return Sizer{PtrSize: 4}
-	default:
-		return Sizer{PtrSize: 8}
-	}
+func SizerFor(name string) Sizer {
+	return Sizer{PtrSize: goarch.PtrSize(name)}
 }
 
 // Info holds size and alignment of a type in bytes.

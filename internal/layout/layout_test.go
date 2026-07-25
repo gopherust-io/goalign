@@ -292,6 +292,53 @@ func TestBoolPackNote(t *testing.T) {
 	}
 }
 
+func TestNeedsReport(t *testing.T) {
+	t.Parallel()
+
+	t.Run("waste", func(t *testing.T) {
+		t.Parallel()
+		fields := []layout.Field{{Name: "A", Size: 1, Align: 1}}
+		if !layout.NeedsReport(7, fields) {
+			t.Fatal("wasted > 0 should report")
+		}
+	})
+
+	t.Run("atomicsNotLeading", func(t *testing.T) {
+		t.Parallel()
+		fields := []layout.Field{
+			{Name: "A", Size: 1, Align: 1, Flags: layout.FlagBool},
+			{Name: "B", Size: 8, Align: 8, Flags: layout.FlagAtomic},
+		}
+		if !layout.NeedsReport(0, fields) {
+			t.Fatal("atomics not leading with 0 waste should report")
+		}
+	})
+
+	t.Run("scatteredBools", func(t *testing.T) {
+		t.Parallel()
+		fields := []layout.Field{
+			{Name: "A", Size: 1, Align: 1, Flags: layout.FlagBool},
+			{Name: "B", Size: 8, Align: 8},
+			{Name: "C", Size: 1, Align: 1, Flags: layout.FlagBool},
+			{Name: "D", Size: 1, Align: 1, Flags: layout.FlagBool},
+		}
+		if !layout.NeedsReport(0, fields) {
+			t.Fatal("scattered bools should report even with 0 waste")
+		}
+	})
+
+	t.Run("clean", func(t *testing.T) {
+		t.Parallel()
+		fields := []layout.Field{
+			{Name: "A", Size: 8, Align: 8, Flags: layout.FlagAtomic},
+			{Name: "B", Size: 8, Align: 8},
+		}
+		if layout.NeedsReport(0, fields) {
+			t.Fatal("clean struct should not report")
+		}
+	})
+}
+
 func TestSizerArch(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

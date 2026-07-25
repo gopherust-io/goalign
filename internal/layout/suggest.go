@@ -1,6 +1,10 @@
 package layout
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/gopherust-io/goalign/internal/alignmath"
+)
 
 // SuggestResult holds a density-optimized field order and metrics.
 type SuggestResult struct {
@@ -23,16 +27,7 @@ func Suggest(dst []Field, fields []Field, originalWasted int) SuggestResult {
 		return SuggestResult{Fields: dst[:0]}
 	}
 
-	atomicCount := 0
-	boolCount := 0
-	for _, f := range fields {
-		if f.IsAtomic() {
-			atomicCount++
-		}
-		if f.IsBool() {
-			boolCount++
-		}
-	}
+	atomicCount, boolCount := countFlags(fields)
 
 	// Prefer in-place partition into dst[0:n], using dst[n:2n] as scratch when available.
 	var out []Field
@@ -72,20 +67,13 @@ func Suggest(dst []Field, fields []Field, originalWasted int) SuggestResult {
 		if f.Align > maxAlign {
 			maxAlign = f.Align
 		}
-		pad := alignPad(total, f.Align)
-		wasted += pad
-		f.Offset = total + pad
+		var offset int
+		total, wasted, offset = alignmath.AddField(total, wasted, f.Size, f.Align)
+		f.Offset = offset
 		out[i] = f
-		total = f.Offset + f.Size
 		lastSize = f.Size
 	}
-	if n > 0 && lastSize == 0 && total > 0 {
-		total++
-		wasted++
-	}
-	trail := alignPad(total, maxAlign)
-	wasted += trail
-	total += trail
+	total, wasted, _ = alignmath.Finish(total, wasted, maxAlign, lastSize, n)
 
 	saved := originalWasted - wasted
 	if saved < 0 {
@@ -111,18 +99,38 @@ func densitySort(fields []Field) {
 	})
 }
 
+func countFlags(fields []Field) (atomicCount, boolCount int) {
+	for _, f := range fields {
+		if f.IsAtomic() {
+			atomicCount++
+		}
+		if f.IsBool() {
+			boolCount++
+		}
+	}
+	return atomicCount, boolCount
+}
+
 func ruleNotes(original []Field, atomicCount, boolCount, wasted int) []string {
 	var notes []string
 
-	if atomicCount > 0 && !atomicsAreLeading(original) {
+	if needsAtomicsFirstNote(original, atomicCount) {
 		notes = append(notes, "atomics-first: place int64/uint64/atomic.* counters at the start of the struct (NATS/nats.go convention)")
 	}
 
-	if boolCount >= 3 && wasted > 0 && hasScatteredBools(original) {
+	if wasted > 0 && needsBoolPack(original, boolCount) {
 		notes = append(notes, "bool-pack: 3+ bools with intervening padding — consider a flag word or bitfield")
 	}
 
 	return notes
+}
+
+func needsAtomicsFirstNote(fields []Field, atomicCount int) bool {
+	return atomicCount > 0 && !atomicsAreLeading(fields)
+}
+
+func needsBoolPack(fields []Field, boolCount int) bool {
+	return boolCount >= 3 && hasScatteredBools(fields)
 }
 
 func atomicsAreLeading(fields []Field) bool {
@@ -160,20 +168,11 @@ func NeedsReport(wasted int, fields []Field) bool {
 	if wasted > 0 {
 		return true
 	}
-	atomicCount := 0
-	boolCount := 0
-	for _, f := range fields {
-		if f.IsAtomic() {
-			atomicCount++
-		}
-		if f.IsBool() {
-			boolCount++
-		}
-	}
-	if atomicCount > 0 && !atomicsAreLeading(fields) {
+	atomicCount, boolCount := countFlags(fields)
+	if needsAtomicsFirstNote(fields, atomicCount) {
 		return true
 	}
-	if boolCount >= 3 && hasScatteredBools(fields) {
+	if needsBoolPack(fields, boolCount) {
 		return true
 	}
 	return false

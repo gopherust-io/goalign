@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -243,7 +244,7 @@ func parseProtobufFields(data []byte) []map[string]interface{} {
 
 				if !isLikelyMessage || len(nested) == 0 {
 					// Not a nested message, try to decode as string
-					if isValidUTF8(bytes) || isPrintable(bytes) {
+					if utf8.Valid(bytes) || isPrintable(bytes) {
 						field["value"] = string(bytes)
 						field["value_type"] = "string"
 						field["hex"] = hex.EncodeToString(bytes)
@@ -325,10 +326,6 @@ func isPrintable(data []byte) bool {
 	return true
 }
 
-func isValidUTF8(data []byte) bool {
-	return utf8.Valid(data)
-}
-
 func looksLikeValidProtobuf(fields []map[string]interface{}) bool {
 	// Check if fields have reasonable values
 	// Too many fields with very large varint values suggests we're parsing random data
@@ -350,7 +347,7 @@ func extractMetadata(data []byte) map[string]interface{} {
 	metadata["hex_preview"] = hex.EncodeToString(data[:min(64, len(data))])
 
 	// Check for gRPC status
-	if idx := findSubstring(data, []byte("grpc-status")); idx >= 0 {
+	if idx := bytes.Index(data, []byte("grpc-status")); idx >= 0 {
 		metadata["grpc_status_found"] = true
 		if idx+20 < len(data) {
 			end := min(idx+50, len(data))
@@ -380,27 +377,4 @@ func extractStrings(bytes []byte) []string {
 	}
 
 	return strings
-}
-
-func findSubstring(data []byte, pattern []byte) int {
-	for i := 0; i <= len(data)-len(pattern); i++ {
-		match := true
-		for j := 0; j < len(pattern); j++ {
-			if data[i+j] != pattern[j] {
-				match = false
-				break
-			}
-		}
-		if match {
-			return i
-		}
-	}
-	return -1
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

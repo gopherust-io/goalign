@@ -57,7 +57,7 @@ coverage-html: coverage
 	@echo "Wrote coverage.html"
 
 bench:
-	go test -bench='BenchmarkCompute|BenchmarkAnalyzeFile' -benchmem -run '^$$' ./internal/layout/ ./internal/analyzer/
+	go test -bench='BenchmarkCompute|BenchmarkAnalyzeFile|BenchmarkAlignPad|BenchmarkFinish|BenchmarkAddField' -benchmem -run '^$$' ./internal/layout/ ./internal/analyzer/ ./internal/alignmath/
 
 fuzz:
 	@set -e; for fuzz in $(FUZZ_TESTS); do \

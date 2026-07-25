@@ -150,52 +150,43 @@ func buildMessage(name string, wasted, total, saved int, notes []string) string 
 }
 
 func genDeclIgnored(fset *token.FileSet, gd *ast.GenDecl, cmap ast.CommentMap, file *ast.File) bool {
-	if gd.Doc != nil {
-		for _, c := range gd.Doc.List {
-			if isIgnoreDirective(c.Text) {
-				return true
-			}
-		}
+	return ignoreFromDocCmapEOL(fset, gd.Doc, gd, gd.End(), cmap, file)
+}
+
+func hasIgnoreComment(fset *token.FileSet, typeSpec *ast.TypeSpec, gd *ast.GenDecl, cmap ast.CommentMap, file *ast.File) bool {
+	end := typeSpec.End()
+	if gd != nil && gd.End() > end {
+		end = gd.End()
 	}
-	if hasEOLIgnore(fset, gd.End(), file) {
+	return ignoreFromDocCmapEOL(fset, typeSpec.Doc, typeSpec, end, cmap, file)
+}
+
+// ignoreFromDocCmapEOL reports goalign:ignore on doc comments, EOL at end, or CommentMap[key].
+func ignoreFromDocCmapEOL(fset *token.FileSet, doc *ast.CommentGroup, cmapKey ast.Node, end token.Pos, cmap ast.CommentMap, file *ast.File) bool {
+	if commentGroupHasIgnore(doc) {
 		return true
 	}
-	if cmap == nil {
+	if hasEOLIgnore(fset, end, file) {
+		return true
+	}
+	if cmap == nil || cmapKey == nil {
 		return false
 	}
-	for _, cg := range cmap[gd] {
-		for _, c := range cg.List {
-			if isIgnoreDirective(c.Text) {
-				return true
-			}
+	for _, cg := range cmap[cmapKey] {
+		if commentGroupHasIgnore(cg) {
+			return true
 		}
 	}
 	return false
 }
 
-func hasIgnoreComment(fset *token.FileSet, typeSpec *ast.TypeSpec, gd *ast.GenDecl, cmap ast.CommentMap, file *ast.File) bool {
-	if typeSpec.Doc != nil {
-		for _, c := range typeSpec.Doc.List {
-			if isIgnoreDirective(c.Text) {
-				return true
-			}
-		}
-	}
-	end := typeSpec.End()
-	if gd != nil && gd.End() > end {
-		end = gd.End()
-	}
-	if hasEOLIgnore(fset, end, file) {
-		return true
-	}
-	if cmap == nil {
+func commentGroupHasIgnore(cg *ast.CommentGroup) bool {
+	if cg == nil {
 		return false
 	}
-	for _, cg := range cmap[typeSpec] {
-		for _, c := range cg.List {
-			if isIgnoreDirective(c.Text) {
-				return true
-			}
+	for _, c := range cg.List {
+		if isIgnoreDirective(c.Text) {
+			return true
 		}
 	}
 	return false
