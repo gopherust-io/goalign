@@ -1,0 +1,47 @@
+name: Security scan
+
+on:
+  schedule:
+    - cron: "27 5 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  GOWORK: off
+
+jobs:
+  govulncheck:
+    name: Weekly govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+          cache-dependency-path: go.sum
+      - name: Cache govulncheck
+        id: govulncheck-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/bin/govulncheck
+          key: govulncheck-v1.6.0-${{ runner.os }}-${{ hashFiles('go.mod') }}
+          restore-keys: |
+            govulncheck-v1.6.0-${{ runner.os }}-
+      - name: Install govulncheck
+        if: steps.govulncheck-cache.outputs.cache-hit != 'true'
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+      - name: Add Go bin to PATH
+        run: echo "$HOME/go/bin" >> "$GITHUB_PATH"
+      - name: Run govulncheck
+        run: govulncheck ./...

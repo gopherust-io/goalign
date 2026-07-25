@@ -39,3 +39,5 @@ On PRs and `main`/`master`, GitHub Actions runs:
 | Critical benchmarks | `BenchmarkCompute`, `BenchmarkAnalyzeFile` |
 | Fuzz smoke | `FuzzComputeSource`, `FuzzTypeInfo` (2s each) |
 | Vulnerability scan | `govulncheck` |
+
+Security reports: see [SECURITY.md](SECURITY.md). Do not open public issues for vulnerabilities.

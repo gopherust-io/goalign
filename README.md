@@ -3,6 +3,8 @@
 A fast CLI for analyzing Go struct alignment and suggesting CPU-friendly field order
 (NATS / `govet/fieldalignment` style).
 
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/gopherust-io/goalign/badge)](https://scorecard.dev/viewer/?uri=github.com/gopherust-io/goalign)
+
 ## Features
 
 - **Struct analysis** — detects inter-field and trailing padding waste
