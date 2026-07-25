@@ -1,6 +1,6 @@
-module github.com/nekruzjm/goalign
+module github.com/gopherust-io/goalign
 
-go 1.25.8
+go 1.26.5
 
 require github.com/spf13/cobra v1.10.2
 

@@ -15,9 +15,9 @@ type Result struct {
 }
 
 // Compute lays out fields into dst without allocating when dst has capacity.
-// Type display strings are left empty; call FillTypeNames if needed for output.
+// locals is an optional same-file type map from CollectLocals (may be nil).
 // If any field type is Unknown, Unknown is set and metrics should not be trusted for reporting.
-func (s Sizer) Compute(dst []Field, fields *ast.FieldList) (Result, []Field) {
+func (s Sizer) Compute(dst []Field, fields *ast.FieldList, locals map[string]Info) (Result, []Field) {
 	if fields == nil {
 		return Result{MaxAlign: 1}, dst[:0]
 	}
@@ -29,7 +29,7 @@ func (s Sizer) Compute(dst []Field, fields *ast.FieldList) (Result, []Field) {
 	lastSize := 0
 
 	for _, f := range fields.List {
-		info := s.TypeInfo(f.Type)
+		info := s.TypeInfo(f.Type, locals)
 		if info.IsUnknown() {
 			return Result{Unknown: true, MaxAlign: 1}, dst[:0]
 		}

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/nekruzjm/goalign/internal/analyzer"
-	"github.com/nekruzjm/goalign/internal/layout"
+	"github.com/gopherust-io/goalign/internal/analyzer"
+	"github.com/gopherust-io/goalign/internal/layout"
 )
 
 // Format writes analysis results to w in the given format (text|table|json).

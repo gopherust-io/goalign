@@ -6,9 +6,10 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"regexp"
 	"strings"
 
-	"github.com/nekruzjm/goalign/internal/layout"
+	"github.com/gopherust-io/goalign/internal/layout"
 )
 
 // Result represents the analysis result for a file.
@@ -30,6 +31,12 @@ type Issue struct {
 	TotalSize       int            `json:"total_size"`
 	SuggestedWasted int            `json:"suggested_wasted"`
 	Saved           int            `json:"saved_bytes"`
+}
+
+var ignoreDirective = regexp.MustCompile(`(?m)^\s*(//|/\*)\s*goalign:ignore\b`)
+
+func isIgnoreDirective(text string) bool {
+	return ignoreDirective.MatchString(text)
 }
 
 // AnalyzeFile analyzes a Go file for struct alignment issues.
@@ -62,8 +69,8 @@ func AnalyzeSource(filename string, content []byte, sizer layout.Sizer) (Result,
 	if len(node.Comments) > 0 {
 		cmap = ast.NewCommentMap(fileSet, node, node.Comments)
 	}
+	locals := sizer.CollectLocals(node)
 	fieldBuf := make([]layout.Field, 0, 16)
-	// Suggest needs capacity >= 2*n for zero-alloc partition scratch.
 	suggestBuf := make([]layout.Field, 0, 32)
 
 	ast.Inspect(node, func(n ast.Node) bool {
@@ -71,7 +78,7 @@ func AnalyzeSource(filename string, content []byte, sizer layout.Sizer) (Result,
 		if !ok || gd.Tok != token.TYPE {
 			return true
 		}
-		ignoreDecl := genDeclIgnored(gd, cmap)
+		ignoreDecl := genDeclIgnored(fileSet, gd, cmap, node)
 		for _, spec := range gd.Specs {
 			ts, ok := spec.(*ast.TypeSpec)
 			if !ok {
@@ -81,15 +88,15 @@ func AnalyzeSource(filename string, content []byte, sizer layout.Sizer) (Result,
 			if !ok {
 				continue
 			}
-			if ignoreDecl || hasIgnoreComment(ts, cmap) {
+			if ignoreDecl || hasIgnoreComment(fileSet, ts, gd, cmap, node) {
 				continue
 			}
 
-			res, fields := sizer.Compute(fieldBuf[:0], st.Fields)
+			res, fields := sizer.Compute(fieldBuf[:0], st.Fields, locals)
 			fieldBuf = fields[:cap(fields)]
 
 			if res.Unknown {
-				continue // unresolvable sizes — avoid false positives
+				continue
 			}
 			if !layout.NeedsReport(res.Wasted, fields) {
 				continue
@@ -103,7 +110,6 @@ func AnalyzeSource(filename string, content []byte, sizer layout.Sizer) (Result,
 			suggestBuf = sug.Fields[:cap(sug.Fields)]
 			suggestedOwned := make([]layout.Field, len(sug.Fields))
 			copy(suggestedOwned, sug.Fields)
-			// Type strings already present on Field after FillTypeNames + Suggest copy.
 
 			line := fileSet.Position(ts.Pos()).Line
 			msg := buildMessage(ts.Name.Name, res.Wasted, res.Total, sug.Saved, sug.Notes)
@@ -122,7 +128,7 @@ func AnalyzeSource(filename string, content []byte, sizer layout.Sizer) (Result,
 				Notes:           sug.Notes,
 			})
 		}
-		return false // already handled TypeSpecs; avoid double visit
+		return false
 	})
 
 	return result, nil
@@ -143,20 +149,23 @@ func buildMessage(name string, wasted, total, saved int, notes []string) string 
 	return msg
 }
 
-func genDeclIgnored(gd *ast.GenDecl, cmap ast.CommentMap) bool {
+func genDeclIgnored(fset *token.FileSet, gd *ast.GenDecl, cmap ast.CommentMap, file *ast.File) bool {
 	if gd.Doc != nil {
 		for _, c := range gd.Doc.List {
-			if strings.Contains(c.Text, "goalign:ignore") {
+			if isIgnoreDirective(c.Text) {
 				return true
 			}
 		}
+	}
+	if hasEOLIgnore(fset, gd.End(), file) {
+		return true
 	}
 	if cmap == nil {
 		return false
 	}
 	for _, cg := range cmap[gd] {
 		for _, c := range cg.List {
-			if strings.Contains(c.Text, "goalign:ignore") {
+			if isIgnoreDirective(c.Text) {
 				return true
 			}
 		}
@@ -164,20 +173,50 @@ func genDeclIgnored(gd *ast.GenDecl, cmap ast.CommentMap) bool {
 	return false
 }
 
-func hasIgnoreComment(typeSpec *ast.TypeSpec, cmap ast.CommentMap) bool {
+func hasIgnoreComment(fset *token.FileSet, typeSpec *ast.TypeSpec, gd *ast.GenDecl, cmap ast.CommentMap, file *ast.File) bool {
 	if typeSpec.Doc != nil {
 		for _, c := range typeSpec.Doc.List {
-			if strings.Contains(c.Text, "goalign:ignore") {
+			if isIgnoreDirective(c.Text) {
 				return true
 			}
 		}
+	}
+	end := typeSpec.End()
+	if gd != nil && gd.End() > end {
+		end = gd.End()
+	}
+	if hasEOLIgnore(fset, end, file) {
+		return true
 	}
 	if cmap == nil {
 		return false
 	}
 	for _, cg := range cmap[typeSpec] {
 		for _, c := range cg.List {
-			if strings.Contains(c.Text, "goalign:ignore") {
+			if isIgnoreDirective(c.Text) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// hasEOLIgnore reports whether a // goalign:ignore comment ends on the same
+// source line as pos (handles last-decl CommentMap attaching to *ast.File).
+func hasEOLIgnore(fset *token.FileSet, pos token.Pos, file *ast.File) bool {
+	if file == nil || fset == nil {
+		return false
+	}
+	line := fset.Position(pos).Line
+	for _, cg := range file.Comments {
+		for _, c := range cg.List {
+			if !strings.HasPrefix(c.Text, "//") {
+				continue
+			}
+			if fset.Position(c.Pos()).Line != line {
+				continue
+			}
+			if isIgnoreDirective(c.Text) {
 				return true
 			}
 		}
@@ -195,5 +234,5 @@ func getSeverity(wastedBytes int) string {
 	if wastedBytes > 0 {
 		return "low"
 	}
-	return "info" // rule-only (e.g. atomics-first with zero padding)
+	return "info"
 }

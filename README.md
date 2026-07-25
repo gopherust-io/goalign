@@ -16,7 +16,7 @@ A fast CLI for analyzing Go struct alignment and suggesting CPU-friendly field o
 ## Installation
 
 ```bash
-go install github.com/nekruzjm/goalign@latest
+go install github.com/gopherust-io/goalign@latest
 ```
 
 ## Usage

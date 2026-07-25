@@ -46,7 +46,7 @@ jobs:
           set -euo pipefail
           mapfile -t pkgs < <(go list ./... | grep -vE '/examples')
           go test "${pkgs[@]}" -count=1 -parallel=$(nproc) -timeout=60s
-          mapfile -t cover_pkgs < <(go list ./internal/...)
+          mapfile -t cover_pkgs < <(go list ./internal/... ./cmd)
           go test "${cover_pkgs[@]}" -count=1 -parallel=$(nproc) -timeout=60s -coverprofile=coverage.out
       - name: Enforce coverage threshold
         env:

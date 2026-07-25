@@ -5,8 +5,8 @@ import (
 	"runtime"
 	"testing"
 
-	"github.com/nekruzjm/goalign/internal/analyzer"
-	"github.com/nekruzjm/goalign/internal/layout"
+	"github.com/gopherust-io/goalign/internal/analyzer"
+	"github.com/gopherust-io/goalign/internal/layout"
 )
 
 func examplesDir(t *testing.T) string {

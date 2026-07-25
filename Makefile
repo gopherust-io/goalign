@@ -1,7 +1,7 @@
 export GOWORK := off
 
 PKGS := $(shell go list ./... | grep -vE '/examples')
-COVER_PKGS := $(shell go list ./internal/...)
+COVER_PKGS := $(shell go list ./internal/... ./cmd)
 FUZZ_PKGS := ./internal/layout
 FUZZ_TESTS := FuzzComputeSource FuzzTypeInfo
 NPROCS := $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)

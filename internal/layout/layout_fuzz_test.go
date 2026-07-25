@@ -6,7 +6,7 @@ import (
 	"go/token"
 	"testing"
 
-	"github.com/nekruzjm/goalign/internal/layout"
+	"github.com/gopherust-io/goalign/internal/layout"
 )
 
 // FuzzComputeSource fuzzes struct field lists through parse + Compute.
@@ -50,7 +50,7 @@ func FuzzComputeSource(f *testing.F) {
 				if !ok {
 					continue
 				}
-				res, fields := sizer.Compute(dst[:0], st.Fields)
+				res, fields := sizer.Compute(dst[:0], st.Fields, nil)
 				if res.Unknown {
 					continue // unresolvable sizes are intentional
 				}
@@ -103,7 +103,7 @@ func FuzzTypeInfo(f *testing.F) {
 		if !ok || st.Fields == nil || len(st.Fields.List) == 0 {
 			return
 		}
-		info := sizer.TypeInfo(st.Fields.List[0].Type)
+		info := sizer.TypeInfo(st.Fields.List[0].Type, nil)
 		if info.IsUnknown() {
 			return // unresolvable array lengths / exprs are valid
 		}

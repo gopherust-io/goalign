@@ -11,9 +11,9 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/nekruzjm/goalign/internal/analyzer"
-	"github.com/nekruzjm/goalign/internal/formatter"
-	"github.com/nekruzjm/goalign/internal/layout"
+	"github.com/gopherust-io/goalign/internal/analyzer"
+	"github.com/gopherust-io/goalign/internal/formatter"
+	"github.com/gopherust-io/goalign/internal/layout"
 )
 
 var (
@@ -66,6 +66,10 @@ func runAnalyze(cmd *cobra.Command, args []string) {
 
 	sizer := layout.DefaultSizer()
 	if arch != "" {
+		if !layout.ValidArch(arch) {
+			fmt.Fprintf(os.Stderr, "Error: unknown --arch %q\n", arch)
+			os.Exit(1)
+		}
 		sizer = layout.SizerFor(arch)
 	}
 
@@ -84,7 +88,7 @@ func runAnalyze(cmd *cobra.Command, args []string) {
 		fmt.Printf("Found %d Go files to analyze\n", len(goFiles))
 	}
 
-	results := analyzeParallel(goFiles, sizer)
+	results, fileErrs := analyzeParallel(goFiles, sizer)
 	results = filterMinWaste(results, minWaste)
 
 	if err := formatter.Format(os.Stdout, results, format); err != nil {
@@ -92,8 +96,15 @@ func runAnalyze(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
+	exitCode := 0
+	if fileErrs > 0 {
+		exitCode = 1
+	}
 	if failOnFindings && countIssues(results) > 0 {
-		os.Exit(1)
+		exitCode = 1
+	}
+	if exitCode != 0 {
+		os.Exit(exitCode)
 	}
 }
 
@@ -125,7 +136,7 @@ func countIssues(results []analyzer.Result) int {
 	return n
 }
 
-func analyzeParallel(goFiles []string, sizer layout.Sizer) []analyzer.Result {
+func analyzeParallel(goFiles []string, sizer layout.Sizer) ([]analyzer.Result, int) {
 	workers := runtime.GOMAXPROCS(0)
 	if workers < 1 {
 		workers = 1
@@ -170,9 +181,11 @@ func analyzeParallel(goFiles []string, sizer layout.Sizer) []analyzer.Result {
 
 	byIndex := make([]analyzer.Result, len(goFiles))
 	hasIssue := make([]bool, len(goFiles))
+	fileErrs := 0
 	for item := range out {
 		if item.err != nil {
 			fmt.Fprintf(os.Stderr, "Error analyzing %s: %v\n", goFiles[item.i], item.err)
+			fileErrs++
 			continue
 		}
 		if len(item.result.Issues) > 0 {
@@ -187,11 +200,15 @@ func analyzeParallel(goFiles []string, sizer layout.Sizer) []analyzer.Result {
 			results = append(results, byIndex[i])
 		}
 	}
-	return results
+	return results, fileErrs
 }
 
 func findGoFiles(path string, recursive bool) ([]string, error) {
 	var files []string
+	root, err := filepath.Abs(path)
+	if err != nil {
+		root = path
+	}
 
 	if !recursive {
 		if info, err := os.Stat(path); err == nil && !info.IsDir() {
@@ -225,18 +242,24 @@ func findGoFiles(path string, recursive bool) ([]string, error) {
 		return files, nil
 	}
 
-	err := filepath.WalkDir(path, func(filePath string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(path, func(filePath string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
-			name := d.Name()
-			if _, skip := defaultSkipDirs[name]; skip {
-				return filepath.SkipDir
+			abs, aerr := filepath.Abs(filePath)
+			if aerr != nil {
+				abs = filePath
 			}
-			// Also skip dirs matching user exclude patterns.
-			if shouldExclude(filePath) || shouldExclude(name+string(filepath.Separator)) {
-				return filepath.SkipDir
+			// Never SkipDir the walk root (e.g. analyze -r vendor/).
+			if abs != root {
+				name := d.Name()
+				if _, skip := defaultSkipDirs[name]; skip {
+					return filepath.SkipDir
+				}
+				if shouldExclude(filePath) || shouldExclude(name+string(filepath.Separator)) {
+					return filepath.SkipDir
+				}
 			}
 			return nil
 		}

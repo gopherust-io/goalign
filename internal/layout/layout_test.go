@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nekruzjm/goalign/internal/layout"
+	"github.com/gopherust-io/goalign/internal/layout"
 )
 
 func parseStruct(t *testing.T, src string) *ast.StructType {
@@ -152,7 +152,7 @@ func TestComputeGolden(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			st := parseStruct(t, tt.src)
-			res, fields := s.Compute(nil, st.Fields)
+			res, fields := s.Compute(nil, st.Fields, nil)
 			if res.N != tt.wantN {
 				t.Fatalf("n=%d want %d", res.N, tt.wantN)
 			}
@@ -182,7 +182,7 @@ func TestComputeNoAlloc(t *testing.T) {
 	dst := make([]layout.Field, 16)
 
 	allocs := testing.AllocsPerRun(1000, func() {
-		_, _ = s.Compute(dst[:0], st.Fields)
+		_, _ = s.Compute(dst[:0], st.Fields, nil)
 	})
 	if allocs != 0 {
 		t.Fatalf("Compute allocs/op = %v, want 0", allocs)
@@ -196,7 +196,7 @@ func TestUnknownArrayLen(t *testing.T) {
 		B int64
 	}`)
 	s := layout.SizerFor("amd64")
-	res, _ := s.Compute(nil, st.Fields)
+	res, _ := s.Compute(nil, st.Fields, nil)
 	if !res.Unknown {
 		t.Fatal("expected Unknown for named const array length")
 	}
@@ -210,7 +210,7 @@ func TestSuggestNoAlloc(t *testing.T) {
 		D bool
 	}`)
 	s := layout.SizerFor("amd64")
-	_, fields := s.Compute(nil, st.Fields)
+	_, fields := s.Compute(nil, st.Fields, nil)
 	dst := make([]layout.Field, 2*len(fields))
 
 	// Warmup + ensure Suggest works with a reused 2*n buffer (no grow).
@@ -234,7 +234,7 @@ func TestSuggestSavesBytes(t *testing.T) {
 		D bool
 	}`)
 	s := layout.SizerFor("amd64")
-	res, fields := s.Compute(nil, st.Fields)
+	res, fields := s.Compute(nil, st.Fields, nil)
 	layout.FillTypeNames(fields, st.Fields)
 	sug := layout.Suggest(nil, fields, res.Wasted)
 	if sug.Saved < 8 {
@@ -254,7 +254,7 @@ func TestSuggestAtomicsFirst(t *testing.T) {
 		Name string
 	}`)
 	s := layout.SizerFor("amd64")
-	_, fields := s.Compute(nil, st.Fields)
+	_, fields := s.Compute(nil, st.Fields, nil)
 	sug := layout.Suggest(nil, fields, 8)
 	if !sug.Fields[0].IsAtomic() {
 		t.Fatalf("first field should be atomic counter, got %+v", sug.Fields[0])
@@ -279,7 +279,7 @@ func TestBoolPackNote(t *testing.T) {
 		D bool
 	}`)
 	s := layout.SizerFor("amd64")
-	res, fields := s.Compute(nil, st.Fields)
+	res, fields := s.Compute(nil, st.Fields, nil)
 	sug := layout.Suggest(nil, fields, res.Wasted)
 	found := false
 	for _, n := range sug.Notes {
@@ -295,23 +295,105 @@ func TestBoolPackNote(t *testing.T) {
 func TestSizerArch(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
-		arch     string
-		ident    string
-		wantSize int
+		arch      string
+		ident     string
+		wantSize  int
+		wantAlign int
 	}{
-		{arch: "386", ident: "int", wantSize: 4},
-		{arch: "amd64", ident: "int", wantSize: 8},
-		{arch: "arm64", ident: "string", wantSize: 16},
+		{arch: "386", ident: "int", wantSize: 4, wantAlign: 4},
+		{arch: "386", ident: "int64", wantSize: 8, wantAlign: 4},
+		{arch: "amd64", ident: "int", wantSize: 8, wantAlign: 8},
+		{arch: "amd64", ident: "int64", wantSize: 8, wantAlign: 8},
+		{arch: "arm64", ident: "string", wantSize: 16, wantAlign: 8},
 	}
 	for _, tt := range tests {
 		t.Run(tt.arch+"/"+tt.ident, func(t *testing.T) {
 			t.Parallel()
 			s := layout.SizerFor(tt.arch)
-			info := s.TypeInfo(&ast.Ident{Name: tt.ident})
-			if info.Size != tt.wantSize {
-				t.Fatalf("size=%d want %d", info.Size, tt.wantSize)
+			info := s.TypeInfo(&ast.Ident{Name: tt.ident}, nil)
+			if info.Size != tt.wantSize || info.Align != tt.wantAlign {
+				t.Fatalf("got %+v want size=%d align=%d", info, tt.wantSize, tt.wantAlign)
 			}
 		})
+	}
+}
+
+func TestCompute386BoolInt64(t *testing.T) {
+	t.Parallel()
+	st := parseStruct(t, `type S struct {
+		A bool
+		B int64
+	}`)
+	s := layout.SizerFor("386")
+	res, _ := s.Compute(nil, st.Fields, nil)
+	if res.Total != 12 {
+		t.Fatalf("total=%d want 12 on 386", res.Total)
+	}
+}
+
+func TestNegativeArrayLenUnknown(t *testing.T) {
+	t.Parallel()
+	st := parseStruct(t, `type S struct {
+		A [0-1]struct{}
+		B int64
+	}`)
+	s := layout.SizerFor("amd64")
+	res, _ := s.Compute(nil, st.Fields, nil)
+	if !res.Unknown {
+		t.Fatal("expected Unknown for negative array length")
+	}
+}
+
+func TestOverflowArrayLenUnknown(t *testing.T) {
+	t.Parallel()
+	st := parseStruct(t, `type S struct {
+		A [1<<61]uint64
+	}`)
+	s := layout.SizerFor("amd64")
+	res, _ := s.Compute(nil, st.Fields, nil)
+	if !res.Unknown {
+		t.Fatal("expected Unknown for overflowing array size")
+	}
+}
+
+func TestSameFileNamedType(t *testing.T) {
+	t.Parallel()
+	src := `package p
+type MyByte byte
+type Hole struct {
+	A MyByte
+	B string
+}
+`
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "t.go", src, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := layout.SizerFor("amd64")
+	locals := s.CollectLocals(file)
+	var st *ast.StructType
+	for _, decl := range file.Decls {
+		gd := decl.(*ast.GenDecl)
+		for _, spec := range gd.Specs {
+			ts := spec.(*ast.TypeSpec)
+			if ts.Name.Name == "Hole" {
+				st = ts.Type.(*ast.StructType)
+			}
+		}
+	}
+	res, _ := s.Compute(nil, st.Fields, locals)
+	if res.Unknown {
+		t.Fatal("unexpected Unknown")
+	}
+	if res.Wasted < 7 {
+		t.Fatalf("wasted=%d want >= 7", res.Wasted)
+	}
+}
+
+func TestValidArch(t *testing.T) {
+	if !layout.ValidArch("amd64") || layout.ValidArch("x86_64") {
+		t.Fatal("ValidArch mismatch")
 	}
 }
 
@@ -337,7 +419,7 @@ func BenchmarkCompute(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		_, _ = s.Compute(dst[:0], st.Fields)
+		_, _ = s.Compute(dst[:0], st.Fields, nil)
 	}
 }
 
