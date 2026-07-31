@@ -203,23 +203,28 @@ func TestUnknownArrayLen(t *testing.T) {
 }
 
 func TestSuggestNoAlloc(t *testing.T) {
+	// Already dense + atomics-leading so ruleNotes returns nil (no note slice alloc).
 	st := parseStruct(t, `type S struct {
-		A bool
 		B int64
 		C int32
+		A bool
 		D bool
 	}`)
 	s := layout.SizerFor("amd64")
 	_, fields := s.Compute(nil, st.Fields, nil)
 	dst := make([]layout.Field, 2*len(fields))
 
-	// Warmup + ensure Suggest works with a reused 2*n buffer (no grow).
-	_ = layout.Suggest(dst[:0], fields, 10)
+	_ = layout.Suggest(dst[:0], fields, 0)
+	allocs := testing.AllocsPerRun(1000, func() {
+		_ = layout.Suggest(dst[:0], fields, 0)
+	})
+	if allocs != 0 {
+		t.Fatalf("Suggest allocs/op = %v, want 0 (with 2*n reused dst, no notes)", allocs)
+	}
 	sug := layout.Suggest(dst[:0], fields, 10)
 	if len(sug.Fields) != len(fields) {
 		t.Fatalf("len=%d want %d", len(sug.Fields), len(fields))
 	}
-	// Cap must remain shared with dst (no realloc of the result slice).
 	if cap(sug.Fields) < 2*len(fields) {
 		t.Fatalf("cap=%d want >= %d (reused dst)", cap(sug.Fields), 2*len(fields))
 	}
@@ -470,6 +475,33 @@ func BenchmarkCompute(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		_, _ = s.Compute(dst[:0], st.Fields, nil)
+	}
+}
+
+func BenchmarkSuggest(b *testing.B) {
+	src := `type S struct {
+		B int64
+		C int32
+		A bool
+		D bool
+		E []byte
+		F string
+		G uint16
+	}`
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "t.go", "package p\n"+src, 0)
+	if err != nil {
+		b.Fatal(err)
+	}
+	st := file.Decls[0].(*ast.GenDecl).Specs[0].(*ast.TypeSpec).Type.(*ast.StructType)
+	s := layout.SizerFor("amd64")
+	_, fields := s.Compute(nil, st.Fields, nil)
+	dst := make([]layout.Field, 2*len(fields))
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = layout.Suggest(dst[:0], fields, 0)
 	}
 }
 

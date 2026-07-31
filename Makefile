@@ -8,7 +8,7 @@ NPROCS := $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/
 GO_TEST_FLAGS := -count=1 -parallel=$(NPROCS) -timeout=60s
 COVERAGE_MIN ?= 70
 
-.PHONY: help build test test-race coverage coverage-html bench fuzz ci vet fmt fmt-check lint lint-fix govulncheck \
+.PHONY: help build test test-race coverage coverage-html bench fuzz escape ci vet fmt fmt-check lint lint-fix govulncheck \
 	install clean run-examples run-source run-verbose run-json run-table build-all
 
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
@@ -22,6 +22,7 @@ help:
 	@echo "  coverage        Cover ./internal/... and enforce COVERAGE_MIN ($(COVERAGE_MIN)%)"
 	@echo "  coverage-html   Open HTML coverage report"
 	@echo "  bench           Run critical benchmarks"
+	@echo "  escape          Compiler escape analysis for hot-path packages"
 	@echo "  fuzz            Fuzz smoke (15s per target)"
 	@echo "  ci              fmt-check + test + test-race + vet + lint"
 	@echo "  fmt             gofmt -w all Go files"
@@ -57,7 +58,17 @@ coverage-html: coverage
 	@echo "Wrote coverage.html"
 
 bench:
-	go test -bench='BenchmarkCompute|BenchmarkAnalyzeFile|BenchmarkAlignPad|BenchmarkFinish|BenchmarkAddField' -benchmem -run '^$$' ./internal/layout/ ./internal/analyzer/ ./internal/alignmath/
+	go test -bench='.' -benchmem -run '^$$' ./internal/layout/ ./internal/analyzer/ ./internal/alignmath/ ./internal/fixer/ ./internal/formatter/ ./internal/bytesconv/
+
+# Filtered compiler escape analysis for layout hot path.
+# Ideal: no lines for Compute/Suggest when callers reuse dst with enough capacity.
+# Cold-path grows (appendField, Suggest make) and reporting still show up — expected.
+escape:
+	@echo "== alignmath + layout (heap escapes) =="
+	@go build -gcflags='-m=2' ./internal/alignmath/ ./internal/layout/ 2>&1 | \
+		grep -E 'escapes to heap|moved to heap' | \
+		grep -vE 'typeString|FillTypeNames|CollectLocals|ruleNotes' || true
+	@echo "== done (Compute/Suggest reused-buffer path should stay quiet) =="
 
 fuzz:
 	@set -e; for fuzz in $(FUZZ_TESTS); do \

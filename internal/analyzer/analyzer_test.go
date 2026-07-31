@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/gopherust-io/goalign/internal/analyzer"
+	"github.com/gopherust-io/goalign/internal/bytesconv"
 	"github.com/gopherust-io/goalign/internal/layout"
 )
 
@@ -75,7 +76,7 @@ func TestAnalyzeComplex(t *testing.T) {
 }
 
 func TestAnalyzeSourceAtomics(t *testing.T) {
-	src := []byte(`package p
+	src := bytesconv.StringToBytes(`package p
 type S struct {
 	Ok bool
 	N int64
@@ -104,7 +105,7 @@ type S struct {
 }
 
 func TestAnalyzeSkipsUnknownArrayLen(t *testing.T) {
-	src := []byte(`package p
+	src := bytesconv.StringToBytes(`package p
 type S struct {
 	A [N]byte
 	B bool
@@ -117,6 +118,31 @@ type S struct {
 	}
 	if len(res.Issues) != 0 {
 		t.Fatalf("expected skip for unknown array len, got %+v", res.Issues)
+	}
+}
+
+func TestAnalyzeFile(t *testing.T) {
+	path := filepath.Join(examplesDir(t), "bad_alignment.go")
+	res, err := analyzer.AnalyzeFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Issues) == 0 {
+		t.Fatal("expected issues from host sizer")
+	}
+}
+
+func TestAnalyzeFileMissing(t *testing.T) {
+	_, err := analyzer.AnalyzeFile(filepath.Join(t.TempDir(), "nope.go"))
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestAnalyzeParseError(t *testing.T) {
+	_, err := analyzer.AnalyzeSource("x.go", []byte("package !!!"), layout.SizerFor("amd64"))
+	if err == nil {
+		t.Fatal("expected parse error")
 	}
 }
 

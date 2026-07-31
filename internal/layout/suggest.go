@@ -1,8 +1,6 @@
 package layout
 
 import (
-	"sort"
-
 	"github.com/gopherust-io/goalign/internal/alignmath"
 )
 
@@ -90,13 +88,26 @@ func Suggest(dst []Field, fields []Field, originalWasted int) SuggestResult {
 	}
 }
 
+// densitySort is a stable insertion sort by align desc, then size desc.
+// Hand-rolled to keep the slice off the heap (sort.SliceStable / slices.Sort*
+// force the backing array to escape).
 func densitySort(fields []Field) {
-	sort.SliceStable(fields, func(i, j int) bool {
-		if fields[i].Align != fields[j].Align {
-			return fields[i].Align > fields[j].Align
+	for i := 1; i < len(fields); i++ {
+		key := fields[i]
+		j := i - 1
+		for j >= 0 && densityLess(key, fields[j]) {
+			fields[j+1] = fields[j]
+			j--
 		}
-		return fields[i].Size > fields[j].Size
-	})
+		fields[j+1] = key
+	}
+}
+
+func densityLess(a, b Field) bool {
+	if a.Align != b.Align {
+		return a.Align > b.Align
+	}
+	return a.Size > b.Size
 }
 
 func countFlags(fields []Field) (atomicCount, boolCount int) {

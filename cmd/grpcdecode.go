@@ -10,6 +10,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/gopherust-io/goalign/internal/bytesconv"
 	"github.com/spf13/cobra"
 )
 
@@ -29,14 +30,14 @@ Can read from file or stdin.`,
 			if err != nil {
 				return fmt.Errorf("failed to read stdin: %w", err)
 			}
-			hexData = strings.TrimSpace(string(data))
+			hexData = strings.TrimSpace(bytesconv.BytesToString(data))
 		} else {
 			// Read from file
 			data, err := os.ReadFile(args[0])
 			if err != nil {
 				return fmt.Errorf("failed to read file: %w", err)
 			}
-			hexData = strings.TrimSpace(string(data))
+			hexData = strings.TrimSpace(bytesconv.BytesToString(data))
 		}
 
 		// Clean hex data (remove spaces, newlines, offsets, ASCII column)
@@ -62,7 +63,7 @@ Can read from file or stdin.`,
 			return fmt.Errorf("failed to marshal JSON: %w", err)
 		}
 
-		fmt.Println(string(jsonOutput))
+		fmt.Println(bytesconv.BytesToString(jsonOutput))
 		return nil
 	},
 }
@@ -98,7 +99,7 @@ func cleanHexData(hexData string) string {
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if line == "" {
+		if bytesconv.IsEmpty(line) {
 			continue
 		}
 
@@ -245,7 +246,7 @@ func parseProtobufFields(data []byte) []map[string]interface{} {
 				if !isLikelyMessage || len(nested) == 0 {
 					// Not a nested message, try to decode as string
 					if utf8.Valid(bytes) || isPrintable(bytes) {
-						field["value"] = string(bytes)
+						field["value"] = bytesconv.BytesToString(bytes)
 						field["value_type"] = "string"
 						field["hex"] = hex.EncodeToString(bytes)
 					} else {
@@ -347,11 +348,11 @@ func extractMetadata(data []byte) map[string]interface{} {
 	metadata["hex_preview"] = hex.EncodeToString(data[:min(64, len(data))])
 
 	// Check for gRPC status
-	if idx := bytes.Index(data, []byte("grpc-status")); idx >= 0 {
+	if idx := bytes.Index(data, bytesconv.StringToBytes("grpc-status")); idx >= 0 {
 		metadata["grpc_status_found"] = true
 		if idx+20 < len(data) {
 			end := min(idx+50, len(data))
-			metadata["grpc_status_section"] = string(data[idx:end])
+			metadata["grpc_status_section"] = bytesconv.BytesToString(data[idx:end])
 		}
 	}
 
@@ -367,13 +368,13 @@ func extractStrings(bytes []byte) []string {
 			current = append(current, bytes[i])
 		} else {
 			if len(current) >= 4 {
-				strings = append(strings, string(current))
+				strings = append(strings, bytesconv.BytesToString(current))
 			}
 			current = nil
 		}
 	}
 	if len(current) >= 4 {
-		strings = append(strings, string(current))
+		strings = append(strings, bytesconv.BytesToString(current))
 	}
 
 	return strings
