@@ -8,11 +8,12 @@ import (
 	"unsafe"
 
 	"github.com/gopherust-io/goalign/internal/analyzer"
+	"github.com/gopherust-io/goalign/internal/bytesconv"
 	"github.com/gopherust-io/goalign/internal/layout"
 )
 
 func TestIgnoreDirectiveExact(t *testing.T) {
-	src := []byte(`package p
+	src := bytesconv.StringToBytes(`package p
 // See docs about goalign:ignore directive usage
 type Mentioned struct {
 	A bool
@@ -50,7 +51,7 @@ type EOL struct {
 }
 
 func TestSameFileAliasWaste(t *testing.T) {
-	src := []byte(`package p
+	src := bytesconv.StringToBytes(`package p
 type MyByte byte
 type Hole struct {
 	A MyByte

@@ -3,6 +3,8 @@ package cmd
 import (
 	"testing"
 	"unicode/utf8"
+
+	"github.com/gopherust-io/goalign/internal/bytesconv"
 )
 
 func TestDecodeVarintTagField16(t *testing.T) {
@@ -21,7 +23,7 @@ func TestDecodeVarintTagField16(t *testing.T) {
 }
 
 func TestIsValidUTF8(t *testing.T) {
-	if !utf8.Valid([]byte("hi")) {
+	if !utf8.Valid(bytesconv.StringToBytes("hi")) {
 		t.Fatal("ascii should be valid utf8")
 	}
 	if utf8.Valid([]byte{0xff, 0xfe, 0xfd}) {

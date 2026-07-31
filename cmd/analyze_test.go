@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/gopherust-io/goalign/internal/bytesconv"
 	"github.com/gopherust-io/goalign/internal/layout"
 )
 
@@ -15,7 +16,7 @@ func TestFindGoFilesWalkRootVendor(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := filepath.Join(vendor, "x.go")
-	if err := os.WriteFile(src, []byte("package v\n"), 0o644); err != nil {
+	if err := os.WriteFile(src, bytesconv.StringToBytes("package v\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	files, err := findGoFiles(vendor, true)
@@ -29,12 +30,12 @@ func TestFindGoFilesWalkRootVendor(t *testing.T) {
 
 func TestFindGoFilesSkipsChildVendor(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "main.go"), bytesconv.StringToBytes("package main\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	vendor := filepath.Join(dir, "vendor")
 	_ = os.MkdirAll(vendor, 0o755)
-	_ = os.WriteFile(filepath.Join(vendor, "x.go"), []byte("package v\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(vendor, "x.go"), bytesconv.StringToBytes("package v\n"), 0o644)
 
 	files, err := findGoFiles(dir, true)
 	if err != nil {

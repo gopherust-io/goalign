@@ -4,6 +4,7 @@ import (
 	"os"
 	"runtime/debug"
 
+	"github.com/gopherust-io/goalign/internal/bytesconv"
 	"github.com/spf13/cobra"
 )
 
@@ -15,24 +16,19 @@ var (
 
 func moduleVersion() string {
 	info, ok := debug.ReadBuildInfo()
-	if !ok || info == nil {
-		return "dev"
+	if !ok || info == nil || bytesconv.IsEmpty(info.Main.Version) {
+		return "unknown"
 	}
-	if info.Main.Version != "" && info.Main.Version != "(devel)" {
-		return info.Main.Version
-	}
-	return "dev"
+	return info.Main.Version
 }
 
 var rootCmd = &cobra.Command{
 	Use:   "goalign",
-	Short: "A CLI tool for analyzing Go struct alignment",
-	Long: `GoAlign is a utility for checking and viewing Golang struct alignment info.
+	Short: "Check and fix Go struct memory alignment",
+	Long: `GoAlign analyzes Go struct field order for padding waste and can rewrite
+structs to a denser, NATS-style layout (atomics first, then density packing).
 
-Struct alignment is the extra space added between fields in a struct to align them 
-in memory according to the CPU's word size. By understanding and managing struct 
-padding (e.g., reordering fields), you can improve program performance, reduce 
-memory usage, and ensure data integrity.`,
+Use "analyze" to report issues and "fix" to apply suggested field order.`,
 	Version: version,
 }
 

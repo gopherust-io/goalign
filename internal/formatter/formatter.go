@@ -3,12 +3,24 @@ package formatter
 import (
 	"encoding/json"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/gopherust-io/goalign/internal/analyzer"
+	"github.com/gopherust-io/goalign/internal/bytesconv"
 	"github.com/gopherust-io/goalign/internal/layout"
+)
+
+const (
+	ansiReset  = "\033[0m"
+	ansiBold   = "\033[1m"
+	ansiRed    = "\033[31m"
+	ansiYellow = "\033[33m"
+	ansiGreen  = "\033[32m"
+	ansiCyan   = "\033[36m"
+	ansiDim    = "\033[2m"
 )
 
 // Format writes analysis results to w in the given format (text|table|json).
@@ -19,11 +31,54 @@ func Format(w io.Writer, results []analyzer.Result, format string) error {
 	case "table":
 		return formatTable(w, results)
 	default:
-		return formatText(w, results)
+		return formatText(w, results, useColor(w))
 	}
 }
 
-func formatText(w io.Writer, results []analyzer.Result) error {
+// FormatFixSummary writes a one-line fix summary.
+func FormatFixSummary(w io.Writer, files, structs, bytesSaved int) error {
+	color := useColor(w)
+	var buf []byte
+	if structs == 0 {
+		buf = append(buf, bytesconv.StringToBytes("No structs needed fixing.\n")...)
+		_, err := w.Write(buf)
+		return err
+	}
+	if color {
+		buf = append(buf, ansiGreen...)
+		buf = append(buf, ansiBold...)
+	}
+	buf = append(buf, bytesconv.StringToBytes("Fixed ")...)
+	buf = strconv.AppendInt(buf, int64(structs), 10)
+	buf = append(buf, bytesconv.StringToBytes(" structs in ")...)
+	buf = strconv.AppendInt(buf, int64(files), 10)
+	buf = append(buf, bytesconv.StringToBytes(" files")...)
+	if bytesSaved > 0 {
+		buf = append(buf, bytesconv.StringToBytes(", saved ")...)
+		buf = strconv.AppendInt(buf, int64(bytesSaved), 10)
+		buf = append(buf, bytesconv.StringToBytes(" bytes")...)
+	}
+	if color {
+		buf = append(buf, ansiReset...)
+	}
+	buf = append(buf, '\n')
+	_, err := w.Write(buf)
+	return err
+}
+
+func useColor(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	if !ok {
+		return false
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return fi.Mode()&os.ModeCharDevice != 0
+}
+
+func formatText(w io.Writer, results []analyzer.Result, color bool) error {
 	if len(results) == 0 {
 		_, err := io.WriteString(w, "No struct alignment issues found.\n")
 		return err
@@ -40,11 +95,17 @@ func formatText(w io.Writer, results []analyzer.Result) error {
 		}
 
 		buf = append(buf, '\n')
-		buf = append(buf, []byte("📁 ")...)
+		if color {
+			buf = append(buf, ansiBold...)
+			buf = append(buf, ansiCyan...)
+		}
 		buf = append(buf, result.File...)
+		if color {
+			buf = append(buf, ansiReset...)
+		}
 		buf = append(buf, '\n')
-		for i := 0; i < len(result.File)+4; i++ {
-			buf = append(buf, '=')
+		for i := 0; i < len(result.File); i++ {
+			buf = append(buf, '-')
 		}
 		buf = append(buf, '\n')
 
@@ -53,32 +114,45 @@ func formatText(w io.Writer, results []analyzer.Result) error {
 			totalWasted += issue.Wasted
 			totalSaved += issue.Saved
 
-			buf = append(buf, getSeverityIcon(issue.Severity)...)
+			buf = appendSeverity(buf, issue.Severity, color)
 			buf = append(buf, ' ')
+			if color {
+				buf = append(buf, ansiBold...)
+			}
 			buf = append(buf, issue.StructName...)
-			buf = append(buf, []byte(" (line ")...)
+			if color {
+				buf = append(buf, ansiReset...)
+			}
+			buf = append(buf, bytesconv.StringToBytes("  line ")...)
 			buf = strconv.AppendInt(buf, int64(issue.Line), 10)
-			buf = append(buf, ')', '\n')
-			buf = append(buf, []byte("   ")...)
+			buf = append(buf, '\n')
+
+			buf = append(buf, bytesconv.StringToBytes("  ")...)
+			if color {
+				buf = append(buf, ansiDim...)
+			}
 			buf = append(buf, issue.Message...)
+			if color {
+				buf = append(buf, ansiReset...)
+			}
 			buf = append(buf, '\n')
 
 			if len(issue.Fields) > 0 {
-				buf = append(buf, []byte("   Fields:\n")...)
-				buf = appendFields(buf, issue.Fields)
+				buf = append(buf, bytesconv.StringToBytes("  Current\n")...)
+				buf = appendFieldTable(buf, issue.Fields)
 			}
-			if len(issue.Suggested) > 0 && issue.Saved > 0 {
-				buf = append(buf, []byte("   Suggested order")...)
+			if len(issue.Suggested) > 0 && (issue.Saved > 0 || !sameFieldNames(issue.Fields, issue.Suggested)) {
+				buf = append(buf, bytesconv.StringToBytes("  Suggested")...)
 				if issue.Saved > 0 {
-					buf = append(buf, []byte(" (saves ")...)
+					buf = append(buf, bytesconv.StringToBytes("  (saves ")...)
 					buf = strconv.AppendInt(buf, int64(issue.Saved), 10)
-					buf = append(buf, []byte(" bytes)")...)
+					buf = append(buf, bytesconv.StringToBytes(" bytes)")...)
 				}
-				buf = append(buf, ':', '\n')
-				buf = appendFields(buf, issue.Suggested)
+				buf = append(buf, '\n')
+				buf = appendFieldTable(buf, issue.Suggested)
 			}
 			for _, note := range issue.Notes {
-				buf = append(buf, []byte("   note: ")...)
+				buf = append(buf, bytesconv.StringToBytes("  note: ")...)
 				buf = append(buf, note...)
 				buf = append(buf, '\n')
 			}
@@ -91,35 +165,93 @@ func formatText(w io.Writer, results []analyzer.Result) error {
 		buf = buf[:0]
 	}
 
-	buf = append(buf, []byte("\n📊 Summary: ")...)
+	if color {
+		buf = append(buf, ansiBold...)
+	}
+	buf = append(buf, bytesconv.StringToBytes("Summary: ")...)
+	if color {
+		buf = append(buf, ansiReset...)
+	}
 	buf = strconv.AppendInt(buf, int64(totalIssues), 10)
-	buf = append(buf, []byte(" issues found, ")...)
+	buf = append(buf, bytesconv.StringToBytes(" issues, ")...)
 	buf = strconv.AppendInt(buf, int64(totalWasted), 10)
-	buf = append(buf, []byte(" bytes wasted")...)
+	buf = append(buf, bytesconv.StringToBytes(" bytes wasted")...)
 	if totalSaved > 0 {
-		buf = append(buf, []byte(", ")...)
+		buf = append(buf, bytesconv.StringToBytes(", ")...)
 		buf = strconv.AppendInt(buf, int64(totalSaved), 10)
-		buf = append(buf, []byte(" bytes savable by reorder")...)
+		buf = append(buf, bytesconv.StringToBytes(" bytes savable")...)
 	}
 	buf = append(buf, '\n')
 	_, err := w.Write(buf)
 	return err
 }
 
-func appendFields(buf []byte, fields []layout.Field) []byte {
-	for _, field := range fields {
-		buf = append(buf, []byte("     ")...)
-		buf = append(buf, field.Name...)
-		buf = append(buf, ' ')
-		buf = append(buf, field.Type...)
-		buf = append(buf, []byte(" (size: ")...)
-		buf = strconv.AppendInt(buf, int64(field.Size), 10)
-		buf = append(buf, []byte(", offset: ")...)
-		buf = strconv.AppendInt(buf, int64(field.Offset), 10)
-		buf = append(buf, []byte(", align: ")...)
-		buf = strconv.AppendInt(buf, int64(field.Align), 10)
-		buf = append(buf, ')', '\n')
+func sameFieldNames(a, b []layout.Field) bool {
+	if len(a) != len(b) {
+		return false
 	}
+	for i := range a {
+		if a[i].Name != b[i].Name {
+			return false
+		}
+	}
+	return true
+}
+
+func appendSeverity(buf []byte, severity string, color bool) []byte {
+	var label string
+	switch severity {
+	case "high":
+		label = "HIGH"
+		if color {
+			buf = append(buf, ansiRed...)
+			buf = append(buf, ansiBold...)
+		}
+	case "medium":
+		label = "MED"
+		if color {
+			buf = append(buf, ansiYellow...)
+			buf = append(buf, ansiBold...)
+		}
+	case "low":
+		label = "LOW"
+		if color {
+			buf = append(buf, ansiGreen...)
+		}
+	case "info":
+		label = "INFO"
+		if color {
+			buf = append(buf, ansiCyan...)
+		}
+	default:
+		label = strings.ToUpper(severity)
+	}
+	buf = append(buf, label...)
+	if color {
+		buf = append(buf, ansiReset...)
+	}
+	return buf
+}
+
+func appendFieldTable(buf []byte, fields []layout.Field) []byte {
+	var twBuf strings.Builder
+	tw := tabwriter.NewWriter(&twBuf, 0, 0, 2, ' ', 0)
+	_, _ = io.WriteString(tw, "    NAME\tTYPE\tSIZE\tOFFSET\tALIGN\n")
+	for _, field := range fields {
+		_, _ = io.WriteString(tw, "    ")
+		_, _ = io.WriteString(tw, field.Name)
+		_, _ = io.WriteString(tw, "\t")
+		_, _ = io.WriteString(tw, field.Type)
+		_, _ = io.WriteString(tw, "\t")
+		_, _ = io.WriteString(tw, strconv.Itoa(field.Size))
+		_, _ = io.WriteString(tw, "\t")
+		_, _ = io.WriteString(tw, strconv.Itoa(field.Offset))
+		_, _ = io.WriteString(tw, "\t")
+		_, _ = io.WriteString(tw, strconv.Itoa(field.Align))
+		_, _ = io.WriteString(tw, "\n")
+	}
+	_ = tw.Flush()
+	buf = append(buf, twBuf.String()...)
 	return buf
 }
 
@@ -163,19 +295,4 @@ func formatJSON(w io.Writer, results []analyzer.Result) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(results)
-}
-
-func getSeverityIcon(severity string) string {
-	switch severity {
-	case "high":
-		return "🔴"
-	case "medium":
-		return "🟡"
-	case "low":
-		return "🟢"
-	case "info":
-		return "ℹ️"
-	default:
-		return "⚪"
-	}
 }
