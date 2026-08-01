@@ -9,7 +9,7 @@ Module: [`github.com/gopherust-io/goalign`](https://github.com/gopherust-io/goal
 
 Latest stable release: see [GitHub Releases](https://github.com/gopherust-io/goalign/releases).
 
-Quick links: [Usage](#usage) · [Known limitations](#known-limitations) · [Contributing](CONTRIBUTING.md)
+Quick links: [Architecture](ARCHITECTURE.md) · [Usage](#usage) · [Known limitations](#known-limitations) · [Contributing](CONTRIBUTING.md)
 
 ---
 

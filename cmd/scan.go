@@ -16,11 +16,14 @@ import (
 	"github.com/gopherust-io/goalign/internal/layout"
 )
 
+const maxAnalyzeWorkers = 8
+
 var (
 	recursive bool
 	exclude   []string
 	arch      string
 	minWaste  int
+	jobs      int
 )
 
 // Default directory names skipped during recursive walks (in addition to -e).
@@ -36,6 +39,7 @@ func addScanFlags(cmd *cobra.Command) {
 	cmd.Flags().StringSliceVarP(&exclude, "exclude", "e", []string{}, "exclude path substrings (e.g., vendor/,testdata/)")
 	cmd.Flags().StringVar(&arch, "arch", "", "target GOARCH for sizes (amd64, arm64, 386, arm); default: host")
 	cmd.Flags().IntVar(&minWaste, "min-waste", 0, "only report/fix issues with wasted bytes >= N")
+	cmd.Flags().IntVarP(&jobs, "jobs", "j", 0, "max parallel file analyzes (default: min(GOMAXPROCS, 8))")
 }
 
 func resolvePath(args []string) string {
@@ -113,6 +117,12 @@ func countIssues(results []analyzer.Result) int {
 
 func analyzeParallel(goFiles []string, sizer layout.Sizer) ([]analyzer.Result, int) {
 	workers := runtime.GOMAXPROCS(0)
+	if workers > maxAnalyzeWorkers {
+		workers = maxAnalyzeWorkers
+	}
+	if jobs > 0 {
+		workers = jobs
+	}
 	if workers < 1 {
 		workers = 1
 	}

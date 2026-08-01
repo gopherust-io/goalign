@@ -48,7 +48,13 @@ func runFix(cmd *cobra.Command, args []string) {
 	)
 
 	for _, r := range results {
-		fr, err := fixer.FixPath(r.File, r.Issues)
+		var fr fixer.FileResult
+		var err error
+		if len(r.Content) > 0 {
+			fr, err = fixer.FixContent(r.File, r.Content, r.Issues)
+		} else {
+			fr, err = fixer.FixPath(r.File, r.Issues)
+		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error fixing %s: %v\n", r.File, err)
 			fixErrs++
