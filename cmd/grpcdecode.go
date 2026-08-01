@@ -25,14 +25,12 @@ Can read from file or stdin.`,
 		var err error
 
 		if len(args) == 0 {
-			// Read from stdin
 			data, err := os.ReadFile("/dev/stdin")
 			if err != nil {
 				return fmt.Errorf("failed to read stdin: %w", err)
 			}
 			hexData = strings.TrimSpace(bytesconv.BytesToString(data))
 		} else {
-			// Read from file
 			data, err := os.ReadFile(args[0])
 			if err != nil {
 				return fmt.Errorf("failed to read file: %w", err)
@@ -40,10 +38,8 @@ Can read from file or stdin.`,
 			hexData = strings.TrimSpace(bytesconv.BytesToString(data))
 		}
 
-		// Clean hex data (remove spaces, newlines, offsets, ASCII column)
 		hexData = cleanHexData(hexData)
 
-		// Decode hex to bytes
 		bytes, err := hex.DecodeString(hexData)
 		if err != nil {
 			return fmt.Errorf("failed to decode hex: %w", err)
@@ -54,10 +50,8 @@ Can read from file or stdin.`,
 			return err
 		}
 
-		// Decode protobuf wire format
 		result := decodeProtobufWireFormat(messageBytes)
 
-		// Output as JSON
 		jsonOutput, err := json.MarshalIndent(result, "", "  ")
 		if err != nil {
 			return fmt.Errorf("failed to marshal JSON: %w", err)
@@ -93,7 +87,6 @@ func messageBytesFromFrame(bytes []byte) ([]byte, error) {
 }
 
 func cleanHexData(hexData string) string {
-	// Remove offset column (hex addresses at start of lines)
 	lines := strings.Split(hexData, "\n")
 	var cleaned []string
 
@@ -103,31 +96,25 @@ func cleanHexData(hexData string) string {
 			continue
 		}
 
-		// Skip lines that are just offsets or separators
 		if strings.HasPrefix(line, "Offset") || strings.HasPrefix(line, "---") {
 			continue
 		}
 
-		// Extract hex values (format: OFFSET: hex hex hex ...)
 		parts := strings.Split(line, ":")
 		if len(parts) > 1 {
 			line = strings.Join(parts[1:], ":")
 		}
 
-		// Remove ASCII column (everything after tab or after 48 chars of hex)
-		// Split by tab first
 		tabParts := strings.Split(line, "\t")
 		if len(tabParts) > 0 {
 			line = tabParts[0]
 		}
 
-		// Extract only hex pairs (00-FF)
 		var hexPairs []string
 		words := strings.Fields(line)
 		for _, word := range words {
 			word = strings.TrimSpace(word)
 			if len(word) == 2 {
-				// Check if it's valid hex
 				if isHex(word) {
 					hexPairs = append(hexPairs, word)
 				}
@@ -171,7 +158,6 @@ func parseProtobufFields(data []byte) []map[string]interface{} {
 			break
 		}
 
-		// Read tag as a protobuf varint (field number + wire type).
 		tag, newPos := decodeVarint(data, pos)
 		if newPos == pos {
 			break
@@ -181,7 +167,6 @@ func parseProtobufFields(data []byte) []map[string]interface{} {
 		wireType := int(tag & 0x07)
 
 		if fieldNum == 0 {
-			// Field number 0 is invalid, might be padding or end of message
 			break
 		}
 
@@ -220,31 +205,26 @@ func parseProtobufFields(data []byte) []map[string]interface{} {
 				}
 				bytes := data[pos : pos+int(length)]
 
-				// Heuristic: check if this looks like a nested message
-				// A message should start with a valid field tag (field_num > 0, wire_type valid)
 				fieldNum := int(bytes[0]) >> 3
 				wireType := int(bytes[0]) & 0x07
 				isLikelyMessage := len(bytes) > 1 &&
-					wireType <= 5 && // Valid wire type
-					fieldNum > 0 && // Valid field number
-					fieldNum < 536870912 // Reasonable field number (2^29-1)
+					wireType <= 5 &&
+					fieldNum > 0 &&
+					fieldNum < 536870912 // protobuf max field number
 
 				var nested []map[string]interface{}
 				if isLikelyMessage {
 					nested = parseProtobufFields(bytes)
-					// Only use as nested message if we got reasonable results
 					if len(nested) > 0 && len(nested) < 100 && looksLikeValidProtobuf(nested) {
 						field["nested_message"] = nested
 						field["value_type"] = "message"
 						field["raw_hex"] = hex.EncodeToString(bytes)
 					} else {
-						// Failed as message, treat as string/bytes
 						isLikelyMessage = false
 					}
 				}
 
 				if !isLikelyMessage || len(nested) == 0 {
-					// Not a nested message, try to decode as string
 					if utf8.Valid(bytes) || isPrintable(bytes) {
 						field["value"] = bytesconv.BytesToString(bytes)
 						field["value_type"] = "string"
@@ -347,7 +327,6 @@ func extractMetadata(data []byte) map[string]interface{} {
 	metadata["total_length"] = len(data)
 	metadata["hex_preview"] = hex.EncodeToString(data[:min(64, len(data))])
 
-	// Check for gRPC status
 	if idx := bytes.Index(data, bytesconv.StringToBytes("grpc-status")); idx >= 0 {
 		metadata["grpc_status_found"] = true
 		if idx+20 < len(data) {

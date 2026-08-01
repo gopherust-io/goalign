@@ -27,7 +27,6 @@ func Suggest(dst []Field, fields []Field, originalWasted int) SuggestResult {
 
 	atomicCount, boolCount := countFlags(fields)
 
-	// Prefer in-place partition into dst[0:n], using dst[n:2n] as scratch when available.
 	var out []Field
 	var scratch []Field
 	if cap(dst) >= 2*n {
@@ -41,7 +40,6 @@ func Suggest(dst []Field, fields []Field, originalWasted int) SuggestResult {
 		scratch = make([]Field, n)
 	}
 
-	// Stable partition into scratch: atomics first, then rest (preserve relative order).
 	ai, ri := 0, atomicCount
 	for _, f := range fields {
 		if f.IsAtomic() {
@@ -55,7 +53,6 @@ func Suggest(dst []Field, fields []Field, originalWasted int) SuggestResult {
 	densitySort(scratch[:atomicCount])
 	densitySort(scratch[atomicCount:n])
 
-	// Relayout into out (also apply zero-size trailing rule).
 	total := 0
 	wasted := 0
 	maxAlign := 1
