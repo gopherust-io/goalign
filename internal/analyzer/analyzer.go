@@ -14,8 +14,9 @@ import (
 
 // Result represents the analysis result for a file.
 type Result struct {
-	File   string  `json:"file"`
-	Issues []Issue `json:"issues"`
+	File    string  `json:"file"`
+	Content []byte  `json:"-"` // source bytes from analyze; reuse for fix to avoid double read
+	Issues  []Issue `json:"issues"`
 }
 
 // Issue represents a struct alignment issue.
@@ -57,7 +58,7 @@ func AnalyzeFileWithSizer(filename string, sizer layout.Sizer) (Result, error) {
 
 // AnalyzeSource analyzes Go source bytes (single parse; no second disk read).
 func AnalyzeSource(filename string, content []byte, sizer layout.Sizer) (Result, error) {
-	result := Result{File: filename}
+	result := Result{File: filename, Content: content}
 
 	fileSet := token.NewFileSet()
 	node, err := parser.ParseFile(fileSet, filename, content, parser.ParseComments)
@@ -69,6 +70,7 @@ func AnalyzeSource(filename string, content []byte, sizer layout.Sizer) (Result,
 	if len(node.Comments) > 0 {
 		cmap = ast.NewCommentMap(fileSet, node, node.Comments)
 	}
+	eolIgnore := buildEOLIgnoreLines(fileSet, node)
 	locals := sizer.CollectLocals(node)
 	fieldBuf := make([]layout.Field, 0, 16)
 	suggestBuf := make([]layout.Field, 0, 32)
@@ -78,7 +80,7 @@ func AnalyzeSource(filename string, content []byte, sizer layout.Sizer) (Result,
 		if !ok || gd.Tok != token.TYPE {
 			return true
 		}
-		ignoreDecl := genDeclIgnored(fileSet, gd, cmap, node)
+		ignoreDecl := genDeclIgnored(fileSet, gd, cmap, eolIgnore)
 		for _, spec := range gd.Specs {
 			ts, ok := spec.(*ast.TypeSpec)
 			if !ok {
@@ -88,7 +90,7 @@ func AnalyzeSource(filename string, content []byte, sizer layout.Sizer) (Result,
 			if !ok {
 				continue
 			}
-			if ignoreDecl || hasIgnoreComment(fileSet, ts, gd, cmap, node) {
+			if ignoreDecl || hasIgnoreComment(fileSet, ts, gd, cmap, eolIgnore) {
 				continue
 			}
 
@@ -149,24 +151,24 @@ func buildMessage(name string, wasted, total, saved int, notes []string) string 
 	return msg
 }
 
-func genDeclIgnored(fset *token.FileSet, gd *ast.GenDecl, cmap ast.CommentMap, file *ast.File) bool {
-	return ignoreFromDocCmapEOL(fset, gd.Doc, gd, gd.End(), cmap, file)
+func genDeclIgnored(fset *token.FileSet, gd *ast.GenDecl, cmap ast.CommentMap, eolIgnore map[int]struct{}) bool {
+	return ignoreFromDocCmapEOL(fset, gd.Doc, gd, gd.End(), cmap, eolIgnore)
 }
 
-func hasIgnoreComment(fset *token.FileSet, typeSpec *ast.TypeSpec, gd *ast.GenDecl, cmap ast.CommentMap, file *ast.File) bool {
+func hasIgnoreComment(fset *token.FileSet, typeSpec *ast.TypeSpec, gd *ast.GenDecl, cmap ast.CommentMap, eolIgnore map[int]struct{}) bool {
 	end := typeSpec.End()
 	if gd != nil && gd.End() > end {
 		end = gd.End()
 	}
-	return ignoreFromDocCmapEOL(fset, typeSpec.Doc, typeSpec, end, cmap, file)
+	return ignoreFromDocCmapEOL(fset, typeSpec.Doc, typeSpec, end, cmap, eolIgnore)
 }
 
 // ignoreFromDocCmapEOL reports goalign:ignore on doc comments, EOL at end, or CommentMap[key].
-func ignoreFromDocCmapEOL(fset *token.FileSet, doc *ast.CommentGroup, cmapKey ast.Node, end token.Pos, cmap ast.CommentMap, file *ast.File) bool {
+func ignoreFromDocCmapEOL(fset *token.FileSet, doc *ast.CommentGroup, cmapKey ast.Node, end token.Pos, cmap ast.CommentMap, eolIgnore map[int]struct{}) bool {
 	if commentGroupHasIgnore(doc) {
 		return true
 	}
-	if hasEOLIgnore(fset, end, file) {
+	if hasEOLIgnore(fset, end, eolIgnore) {
 		return true
 	}
 	if cmap == nil || cmapKey == nil {
@@ -192,27 +194,34 @@ func commentGroupHasIgnore(cg *ast.CommentGroup) bool {
 	return false
 }
 
-// hasEOLIgnore reports whether a // goalign:ignore comment ends on the same
-// source line as pos (handles last-decl CommentMap attaching to *ast.File).
-func hasEOLIgnore(fset *token.FileSet, pos token.Pos, file *ast.File) bool {
-	if file == nil || fset == nil {
-		return false
+// buildEOLIgnoreLines indexes // goalign:ignore comments by source line once per file.
+func buildEOLIgnoreLines(fset *token.FileSet, file *ast.File) map[int]struct{} {
+	if file == nil || fset == nil || len(file.Comments) == 0 {
+		return nil
 	}
-	line := fset.Position(pos).Line
+	out := make(map[int]struct{})
 	for _, cg := range file.Comments {
 		for _, c := range cg.List {
 			if !strings.HasPrefix(c.Text, "//") {
 				continue
 			}
-			if fset.Position(c.Pos()).Line != line {
+			if !isIgnoreDirective(c.Text) {
 				continue
 			}
-			if isIgnoreDirective(c.Text) {
-				return true
-			}
+			out[fset.Position(c.Pos()).Line] = struct{}{}
 		}
 	}
-	return false
+	return out
+}
+
+// hasEOLIgnore reports whether a // goalign:ignore comment ends on the same
+// source line as pos (handles last-decl CommentMap attaching to *ast.File).
+func hasEOLIgnore(fset *token.FileSet, pos token.Pos, eolIgnore map[int]struct{}) bool {
+	if fset == nil || len(eolIgnore) == 0 {
+		return false
+	}
+	_, ok := eolIgnore[fset.Position(pos).Line]
+	return ok
 }
 
 func getSeverity(wastedBytes int) string {

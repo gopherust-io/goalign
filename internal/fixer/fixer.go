@@ -93,17 +93,20 @@ func FixFile(filename string, content []byte, issues []analyzer.Issue) ([]byte, 
 		bytesSaved += iss.Saved
 	}
 
-	// Apply back-to-front so offsets stay valid.
-	sort.Slice(edits, func(i, j int) bool { return edits[i].start > edits[j].start })
-	out := content
+	// Apply front-to-back into one pre-sized buffer (edits must not overlap).
+	sort.Slice(edits, func(i, j int) bool { return edits[i].start < edits[j].start })
+	size := len(content)
 	for _, e := range edits {
-		var b strings.Builder
-		b.Grow(len(out) - (e.end - e.start) + len(e.new))
-		b.Write(out[:e.start])
-		b.WriteString(e.new)
-		b.Write(out[e.end:])
-		out = []byte(b.String())
+		size += len(e.new) - (e.end - e.start)
 	}
+	out := make([]byte, 0, size)
+	pos := 0
+	for _, e := range edits {
+		out = append(out, content[pos:e.start]...)
+		out = append(out, e.new...)
+		pos = e.end
+	}
+	out = append(out, content[pos:]...)
 
 	formatted, err := format.Source(out)
 	if err != nil {
@@ -114,6 +117,22 @@ func FixFile(filename string, content []byte, issues []analyzer.Issue) ([]byte, 
 
 // FixPath reads, rewrites, and writes a Go file when issues are fixable.
 func FixPath(filename string, issues []analyzer.Issue) (FileResult, error) {
+	res := FileResult{File: filename}
+	for _, iss := range issues {
+		if ShouldFix(iss) {
+			content, err := os.ReadFile(filename)
+			if err != nil {
+				return res, err
+			}
+			return FixContent(filename, content, issues)
+		}
+	}
+	return res, nil
+}
+
+// FixContent rewrites and writes using already-loaded source bytes (avoids a
+// second disk read when paired with analyzer.Result.Content).
+func FixContent(filename string, content []byte, issues []analyzer.Issue) (FileResult, error) {
 	res := FileResult{File: filename}
 	fixable := make([]analyzer.Issue, 0, len(issues))
 	names := make([]string, 0, len(issues))
@@ -127,10 +146,6 @@ func FixPath(filename string, issues []analyzer.Issue) (FileResult, error) {
 		return res, nil
 	}
 
-	content, err := os.ReadFile(filename)
-	if err != nil {
-		return res, err
-	}
 	mode := os.FileMode(0o644)
 	if fi, statErr := os.Stat(filename); statErr == nil {
 		mode = fi.Mode().Perm()
