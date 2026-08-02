@@ -4,15 +4,11 @@ import "github.com/gopherust-io/goalign/internal/layout"
 
 // Options configures analysis behavior.
 type Options struct {
-	Sizer  layout.Sizer
-	Policy layout.Policy
-	// TypeSizes maps qualified or local type names to resolved sizes
-	// (populated by --packages mode). Nil means AST heuristics only.
-	TypeSizes map[string]layout.Info
-	// CacheLine is the CPU cache line size for Cacheguard (default 64).
-	CacheLine int
-	// Cacheguard, when true, rewrites Suggested to insert cache-line pads.
-	Cacheguard bool
+	TypeSizes  map[string]layout.Info // --packages resolved sizes (nil = AST only)
+	Policy     layout.Policy
+	Sizer      layout.Sizer
+	CacheLine  int  // CPU cache line size for Cacheguard (default 64)
+	Cacheguard bool // rewrite Suggested to insert cache-line pads
 }
 
 // DefaultOptions returns Options with host sizer and atomics-first policy.

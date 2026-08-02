@@ -15,22 +15,22 @@ var FileNames = []string{".goalign.yml", "goalign.yml"}
 
 // Config holds optional defaults for analyze/fix.
 type Config struct {
-	Arch           string   `yaml:"arch"`
-	MinWaste       *int     `yaml:"min-waste"`
-	Exclude        []string `yaml:"exclude"`
-	Jobs           *int     `yaml:"jobs"`
-	Format         string   `yaml:"format"`
-	FailOnFindings *bool    `yaml:"fail-on-findings"`
-	Recursive      *bool    `yaml:"recursive"`
-	Policy         string   `yaml:"policy"`
-	Packages       *bool    `yaml:"packages"`
-	RewriteBools   *bool    `yaml:"rewrite-bools"`
-	SkipGenerated  *bool    `yaml:"skip-generated"`
-	GeneratedGlobs []string `yaml:"generated"`
-	IgnoreGlobs    []string `yaml:"ignore"`
-	Arches         []string `yaml:"arches"`
 	Cacheguard     *bool    `yaml:"cacheguard"`
 	CacheLine      *int     `yaml:"cache-line"`
+	FailOnFindings *bool    `yaml:"fail-on-findings"`
+	Recursive      *bool    `yaml:"recursive"`
+	Packages       *bool    `yaml:"packages"`
+	Jobs           *int     `yaml:"jobs"`
+	RewriteBools   *bool    `yaml:"rewrite-bools"`
+	MinWaste       *int     `yaml:"min-waste"`
+	SkipGenerated  *bool    `yaml:"skip-generated"`
+	Arch           string   `yaml:"arch"`
+	Policy         string   `yaml:"policy"`
+	Format         string   `yaml:"format"`
+	Exclude        []string `yaml:"exclude"`
+	Arches         []string `yaml:"arches"`
+	IgnoreGlobs    []string `yaml:"ignore"`
+	GeneratedGlobs []string `yaml:"generated"`
 }
 
 // Load walks from start (file or dir) toward filesystem root looking for a config file.

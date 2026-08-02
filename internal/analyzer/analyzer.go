@@ -157,9 +157,8 @@ func AnalyzeSourceWithOptions(filename string, content []byte, opts Options) (Re
 					if layout.HasFalseShare(base, cacheLine) {
 						guarded, nPads := layout.ApplyCacheguard(base, cacheLine)
 						if nPads > 0 {
-							if relayout, total, wasted, ok := layout.Relayout(guarded); ok {
+							if relayout, _, wasted, ok := layout.Relayout(guarded); ok {
 								suggestedOwned = relayout
-								sug.Total = total
 								sug.Wasted = wasted
 							} else {
 								suggestedOwned = guarded

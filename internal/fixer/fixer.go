@@ -20,8 +20,8 @@ import (
 // FileResult is the outcome of rewriting one file.
 type FileResult struct {
 	File       string
-	Structs    []string
 	Diff       string // set when DiffOnly
+	Structs    []string
 	BytesSaved int
 	Changed    bool
 }
@@ -319,7 +319,7 @@ func structBodyEdit(fset *token.FileSet, content []byte, st *ast.StructType, sug
 	// Drop existing Cacheguard pads from slots so re-apply is idempotent.
 	realSlots := make([]fieldSlot, 0, len(slots))
 	for _, slot := range slots {
-		name := "_"
+		var name string
 		if slot.name != nil {
 			name = slot.name.Name
 		} else {
@@ -346,7 +346,7 @@ func structBodyEdit(fset *token.FileSet, content []byte, st *ast.StructType, sug
 	byName := make(map[string]int, len(slots))
 	if !byIndex {
 		for i, slot := range slots {
-			name := "_"
+			var name string
 			if slot.name != nil {
 				name = slot.name.Name
 			} else {

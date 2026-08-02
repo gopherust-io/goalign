@@ -32,7 +32,6 @@ var (
 	ignoreGlobs    []string
 	generatedGlobs []string
 	arches         []string
-	configPath     string // set when a config file was loaded
 	cacheguard     bool
 	cacheLineSize  int
 
@@ -74,7 +73,6 @@ func applyConfig(cmd *cobra.Command, path string) error {
 	if found == "" {
 		return nil
 	}
-	configPath = found
 	if verbose {
 		fmt.Printf("Loaded config %s\n", found)
 	}
