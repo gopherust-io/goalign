@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/gopherust-io/goalign/schemas/analyze.schema.json",
+  "title": "goalign analyze JSON output",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["file", "issues"],
+    "properties": {
+      "file": { "type": "string" },
+      "issues": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["struct_name", "line", "message", "severity", "wasted_bytes"],
+          "properties": {
+            "struct_name": { "type": "string" },
+            "line": { "type": "integer", "minimum": 1 },
+            "message": { "type": "string" },
+            "severity": { "type": "string", "enum": ["high", "medium", "low", "info"] },
+            "wasted_bytes": { "type": "integer", "minimum": 0 },
+            "total_size": { "type": "integer", "minimum": 0 },
+            "saved_bytes": { "type": "integer", "minimum": 0 },
+            "suggested_wasted": { "type": "integer", "minimum": 0 },
+            "notes": { "type": "array", "items": { "type": "string" } },
+            "bool_pack": { "type": "array", "items": { "type": "string" } },
+            "cache_line": { "type": "integer", "minimum": 1 },
+            "fields": { "type": "array" },
+            "suggested": { "type": "array" }
+          }
+        }
+      }
+    }
+  }
+}

@@ -26,7 +26,7 @@ var rootCmd = &cobra.Command{
 	Use:   "goalign",
 	Short: "Check and fix Go struct memory alignment",
 	Long: `GoAlign analyzes Go struct field order for padding waste and can rewrite
-structs to a denser, NATS-style layout (atomics first, then density packing).
+structs to a denser layout (atomics first, then density packing).
 
 Use "analyze" to report issues and "fix" to apply suggested field order.`,
 	Version: version,
@@ -42,5 +42,5 @@ func Execute() {
 
 func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose output")
-	rootCmd.PersistentFlags().StringVarP(&format, "format", "f", "text", "output format (text, json, table)")
+	rootCmd.PersistentFlags().StringVarP(&format, "format", "f", "text", "output format (text, json, table, sarif)")
 }

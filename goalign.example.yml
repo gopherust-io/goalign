@@ -1,0 +1,26 @@
+# Copy to .goalign.yml (or goalign.yml) in the module root.
+# CLI flags override these defaults.
+
+arch: amd64
+min-waste: 8
+fail-on-findings: true
+recursive: true
+policy: atomics       # atomics | density | stable
+packages: false       # true = go/packages type sizes (slower)
+skip-generated: true
+rewrite-bools: false  # dangerous: breaks field accessors
+cacheguard: false     # true = isolate contended fields with cache-line pads
+cache-line: 64
+format: text          # text | json | table | sarif
+jobs: 0               # 0 = default worker count
+exclude:
+  - testdata/
+ignore:
+  - "**/*.pb.go"
+generated:
+  - "*.pb.go"
+  - "*.gen.go"
+# arches:
+#   - amd64
+#   - arm64
+#   - 386

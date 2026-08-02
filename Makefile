@@ -8,7 +8,7 @@ NPROCS := $(shell getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu 2>/
 GO_TEST_FLAGS := -count=1 -parallel=$(NPROCS) -timeout=60s
 COVERAGE_MIN ?= 70
 
-.PHONY: help build test test-race coverage coverage-html bench fuzz escape ci vet fmt fmt-check lint lint-fix govulncheck \
+.PHONY: help build test test-race coverage coverage-html bench bench-corpus bench-compare fuzz escape ci vet fmt fmt-check lint lint-fix govulncheck \
 	install clean run-examples run-source run-verbose run-json run-table build-all
 
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
@@ -22,6 +22,8 @@ help:
 	@echo "  coverage        Cover ./internal/... and enforce COVERAGE_MIN ($(COVERAGE_MIN)%)"
 	@echo "  coverage-html   Open HTML coverage report"
 	@echo "  bench           Run critical benchmarks"
+	@echo "  bench-corpus    Library AnalyzeSource over competitive corpus"
+	@echo "  bench-compare   CLI wall-clock vs betteralign/fieldalignment"
 	@echo "  escape          Compiler escape analysis for hot-path packages"
 	@echo "  fuzz            Fuzz smoke (15s per target)"
 	@echo "  ci              fmt-check + test + test-race + vet + lint"
@@ -36,9 +38,11 @@ help:
 
 build:
 	go build -o bin/goalign .
+	go build -o bin/goalign-analyzer ./cmd/goalign-analyzer
 
 install:
 	go install .
+	go install ./cmd/goalign-analyzer
 
 test:
 	go test $(GO_TEST_FLAGS) $(PKGS)
@@ -59,6 +63,13 @@ coverage-html: coverage
 
 bench:
 	go test -bench='.' -benchmem -run '^$$' ./internal/layout/ ./internal/analyzer/ ./internal/alignmath/ ./internal/fixer/ ./internal/formatter/ ./internal/bytesconv/
+
+bench-corpus:
+	go test -bench=BenchmarkGoalignAnalyzeCorpus -benchmem -count=10 ./internal/benchcmp/ -run '^$$'
+
+bench-compare:
+	@chmod +x scripts/bench-compare.sh
+	@./scripts/bench-compare.sh
 
 # Filtered compiler escape analysis for layout hot path.
 # Ideal: no lines for Compute/Suggest when callers reuse dst with enough capacity.

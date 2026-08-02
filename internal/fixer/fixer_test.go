@@ -506,14 +506,14 @@ func TestShouldFix(t *testing.T) {
 		t.Fatal("empty should not fix")
 	}
 	iss := analyzer.Issue{
-		Fields:    []layout.Field{{Name: "A"}, {Name: "B"}},
-		Suggested: []layout.Field{{Name: "A"}, {Name: "B"}},
+		Fields:    []layout.Field{{Name: "A", Index: 0}, {Name: "B", Index: 1}},
+		Suggested: []layout.Field{{Name: "A", Index: 0}, {Name: "B", Index: 1}},
 		Saved:     8,
 	}
 	if fixer.ShouldFix(iss) {
 		t.Fatal("same order should not fix")
 	}
-	iss.Suggested = []layout.Field{{Name: "B"}, {Name: "A"}}
+	iss.Suggested = []layout.Field{{Name: "B", Index: 1}, {Name: "A", Index: 0}}
 	if !fixer.ShouldFix(iss) {
 		t.Fatal("saved>0 should fix")
 	}
@@ -525,5 +525,71 @@ func TestShouldFix(t *testing.T) {
 	iss.Notes = nil
 	if fixer.ShouldFix(iss) {
 		t.Fatal("no saved and no notes")
+	}
+}
+
+func TestFixBlankIdentifiers(t *testing.T) {
+	src := `package p
+
+type S struct {
+	_ bool
+	N int64
+	_ byte
+}
+`
+	sizer := layout.SizerFor("amd64")
+	res, err := analyzer.AnalyzeSource("x.go", []byte(src), sizer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Issues) == 0 || res.Issues[0].Saved == 0 {
+		t.Fatalf("expected fixable issue: %+v", res.Issues)
+	}
+	out, n, _, err := fixer.FixFile("x.go", []byte(src), res.Issues)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("n=%d out:\n%s", n, out)
+	}
+}
+
+func TestFixPreservesSplitComments(t *testing.T) {
+	src := []byte(`package p
+
+type S struct {
+	// doc-a
+	A, B bool // trail
+	C    int32
+}
+`)
+	// Force A/C/B order so the multi-name decl splits (analyzer keeps equal-density siblings together).
+	iss := analyzer.Issue{
+		StructName: "S",
+		Line:       3,
+		Saved:      1,
+		Fields: []layout.Field{
+			{Name: "A", Index: 0}, {Name: "B", Index: 1}, {Name: "C", Index: 2},
+		},
+		Suggested: []layout.Field{
+			{Name: "A", Index: 0}, {Name: "C", Index: 2}, {Name: "B", Index: 1},
+		},
+	}
+	out, n, _, err := fixer.FixFile("x.go", src, []analyzer.Issue{iss})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Fatalf("n=%d", n)
+	}
+	s := string(out)
+	if strings.Contains(s, "A, B") || strings.Contains(s, "A,B") {
+		t.Fatalf("expected multi-name split:\n%s", s)
+	}
+	if !strings.Contains(s, "doc-a") {
+		t.Fatalf("doc comment lost:\n%s", s)
+	}
+	if !strings.Contains(s, "trail") {
+		t.Fatalf("trailing comment lost:\n%s", s)
 	}
 }

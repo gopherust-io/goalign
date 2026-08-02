@@ -36,3 +36,4 @@ summary.json
 # Editor/IDE
 .idea/
 # .vscode/
+artifacts/

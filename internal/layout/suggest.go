@@ -1,6 +1,8 @@
 package layout
 
 import (
+	"fmt"
+
 	"github.com/gopherust-io/goalign/internal/alignmath"
 )
 
@@ -13,16 +15,22 @@ type SuggestResult struct {
 	Saved  int // originalWasted - Wasted (clamped >= 0)
 }
 
-// Suggest reorders fields: atomic/64-bit counters first (NATS), then density
-// sort (align desc, size desc). Writes into dst when capacity allows.
-// originalWasted is used to compute Saved.
+// Suggest reorders fields with the default atomics-first policy.
+func Suggest(dst []Field, fields []Field, originalWasted int) SuggestResult {
+	return SuggestWithPolicy(dst, fields, originalWasted, PolicyAtomics)
+}
+
+// SuggestWithPolicy reorders fields according to policy.
 //
 // Scratch: when dst has capacity >= 2*n, the second half is used as sort scratch
 // so Suggest avoids heap allocations for the partition/sort buffers.
-func Suggest(dst []Field, fields []Field, originalWasted int) SuggestResult {
+func SuggestWithPolicy(dst []Field, fields []Field, originalWasted int, policy Policy) SuggestResult {
 	n := len(fields)
 	if n == 0 {
 		return SuggestResult{Fields: dst[:0]}
+	}
+	if policy == "" {
+		policy = PolicyAtomics
 	}
 
 	atomicCount, boolCount := countFlags(fields)
@@ -40,18 +48,28 @@ func Suggest(dst []Field, fields []Field, originalWasted int) SuggestResult {
 		scratch = make([]Field, n)
 	}
 
-	ai, ri := 0, atomicCount
-	for _, f := range fields {
-		if f.IsAtomic() {
-			scratch[ai] = f
-			ai++
+	switch policy {
+	case PolicyDensity, PolicyStable:
+		copy(scratch, fields)
+		if policy == PolicyStable {
+			densitySortStable(scratch)
 		} else {
-			scratch[ri] = f
-			ri++
+			densitySort(scratch)
 		}
+	default: // PolicyAtomics
+		ai, ri := 0, atomicCount
+		for _, f := range fields {
+			if f.IsAtomic() {
+				scratch[ai] = f
+				ai++
+			} else {
+				scratch[ri] = f
+				ri++
+			}
+		}
+		densitySort(scratch[:atomicCount])
+		densitySort(scratch[atomicCount:n])
 	}
-	densitySort(scratch[:atomicCount])
-	densitySort(scratch[atomicCount:n])
 
 	total := 0
 	wasted := 0
@@ -63,19 +81,27 @@ func Suggest(dst []Field, fields []Field, originalWasted int) SuggestResult {
 			maxAlign = f.Align
 		}
 		var offset int
-		total, wasted, offset = alignmath.AddField(total, wasted, f.Size, f.Align)
+		var ok bool
+		total, wasted, offset, ok = alignmath.AddField(total, wasted, f.Size, f.Align)
+		if !ok {
+			return SuggestResult{Fields: dst[:0]}
+		}
 		f.Offset = offset
 		out[i] = f
 		lastSize = f.Size
 	}
-	total, wasted, _ = alignmath.Finish(total, wasted, maxAlign, lastSize, n)
+	var ok bool
+	total, wasted, _, ok = alignmath.Finish(total, wasted, maxAlign, lastSize, n)
+	if !ok {
+		return SuggestResult{Fields: dst[:0]}
+	}
 
 	saved := originalWasted - wasted
 	if saved < 0 {
 		saved = 0
 	}
 
-	notes := ruleNotes(fields, atomicCount, boolCount, originalWasted)
+	notes := ruleNotes(fields, atomicCount, boolCount, originalWasted, policy)
 	return SuggestResult{
 		Fields: out,
 		Total:  total,
@@ -100,6 +126,12 @@ func densitySort(fields []Field) {
 	}
 }
 
+// densitySortStable sorts by align/size desc, preserving original relative
+// order for equal keys (insertion sort is already stable).
+func densitySortStable(fields []Field) {
+	densitySort(fields)
+}
+
 func densityLess(a, b Field) bool {
 	if a.Align != b.Align {
 		return a.Align > b.Align
@@ -119,18 +151,45 @@ func countFlags(fields []Field) (atomicCount, boolCount int) {
 	return atomicCount, boolCount
 }
 
-func ruleNotes(original []Field, atomicCount, boolCount, wasted int) []string {
+func ruleNotes(original []Field, atomicCount, boolCount, wasted int, policy Policy) []string {
 	var notes []string
 
-	if needsAtomicsFirstNote(original, atomicCount) {
-		notes = append(notes, "atomics-first: place int64/uint64/atomic.* counters at the start of the struct (NATS/nats.go convention)")
+	if policy == PolicyAtomics && needsAtomicsFirstNote(original, atomicCount) {
+		notes = append(notes, "atomics-first: place int64/uint64/atomic.* counters at the start of the struct")
 	}
 
 	if wasted > 0 && needsBoolPack(original, boolCount) {
 		notes = append(notes, "bool-pack: 3+ bools with intervening padding — consider a flag word or bitfield")
 	}
 
+	if wasted > 0 {
+		if note := ptrdataNote(original); note != "" {
+			notes = append(notes, note)
+		}
+	}
+
 	return notes
+}
+
+func ptrdataNote(fields []Field) string {
+	ptrBytes := 0
+	total := 0
+	ptrFields := 0
+	for _, f := range fields {
+		total += f.Size
+		if f.IsPointer() {
+			ptrFields++
+			ptrBytes += f.Size
+		}
+	}
+	if ptrFields == 0 || total == 0 {
+		return ""
+	}
+	// Only advise when pointers are a meaningful fraction of the object.
+	if ptrBytes*4 < total && ptrFields < 2 {
+		return ""
+	}
+	return fmt.Sprintf("ptrdata: %d/%d field bytes are pointer-bearing (%d fields) — denser packing can improve GC scan efficiency", ptrBytes, total, ptrFields)
 }
 
 func needsAtomicsFirstNote(fields []Field, atomicCount int) bool {
@@ -173,6 +232,11 @@ func hasScatteredBools(fields []Field) bool {
 
 // NeedsReport returns true when the struct should be reported as an issue.
 func NeedsReport(wasted int, fields []Field) bool {
+	return NeedsReportCacheLine(wasted, fields, DefaultCacheLine)
+}
+
+// NeedsReportCacheLine is NeedsReport with an explicit cache line size.
+func NeedsReportCacheLine(wasted int, fields []Field, cacheLine int) bool {
 	if wasted > 0 {
 		return true
 	}
@@ -183,5 +247,37 @@ func NeedsReport(wasted int, fields []Field) bool {
 	if needsBoolPack(fields, boolCount) {
 		return true
 	}
+	if HasFalseShare(fields, cacheLine) {
+		return true
+	}
 	return false
+}
+
+// BoolPackCandidates returns unexported bool field names suitable for flag-word rewrite.
+func BoolPackCandidates(fields []Field) []string {
+	if !needsBoolPack(fields, countBools(fields)) {
+		return nil
+	}
+	var names []string
+	for _, f := range fields {
+		if !f.IsBool() {
+			continue
+		}
+		if f.Name == "" || f.Name == "_" {
+			continue
+		}
+		if f.Name[0] < 'a' || f.Name[0] > 'z' {
+			continue // exported — skip for safety
+		}
+		names = append(names, f.Name)
+	}
+	if len(names) < 3 {
+		return nil
+	}
+	return names
+}
+
+func countBools(fields []Field) int {
+	_, b := countFlags(fields)
+	return b
 }

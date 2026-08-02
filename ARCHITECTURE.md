@@ -4,7 +4,7 @@ CLI that detects Go struct padding waste and optionally rewrites field order int
 
 ## Overview
 
-`github.com/gopherust-io/goalign` scans Go sources via AST (no `go/packages` by default), computes current vs suggested layouts per `GOARCH`, and can autofix field order. Suitable as a local tool or CI gate (`--fail-on-findings`). Part of the gopherust-io developer tooling set alongside **env**, **tel**, and **nats**.
+`github.com/gopherust-io/goalign` scans Go sources via AST (no `go/packages` by default; opt-in `--packages`), computes current vs suggested layouts per `GOARCH`, and can autofix field order (`fix` / `--diff`). Suitable as a local tool or CI gate (`--fail-on-findings`, SARIF). Part of the gopherust-io developer tooling set alongside **env** and **tel**.
 
 Ecosystem: [gopherust-io](https://github.com/gopherust-io/gopherust-io/blob/main/ARCHITECTURE.md)
 
@@ -39,14 +39,21 @@ Ecosystem: [gopherust-io](https://github.com/gopherust-io/gopherust-io/blob/main
 
 | Path | Responsibility |
 |------|----------------|
-| `cmd` | Cobra commands: `analyze`, `fix`, `completion`, `grpc-decode`; scan helpers |
-| `internal/analyzer` | AST scan, `// goalign:ignore`, severity / findings |
-| `internal/layout` | `Sizer`, `Compute`, `Suggest`, field sizing |
+| `cmd` | Cobra commands: `analyze`, `fix`, `completion`; scan helpers + config |
+| `cmd/goalign-analyzer` | vet-compatible `go/analysis` multichecker |
+| `analysis` | Exported `Analyzer` for plugins / golangci |
+| `internal/analyzer` | AST scan, ignores, severity / findings, policies |
+| `internal/layout` | `Sizer`, `Compute`, `Suggest` (+ policies, ptrdata, bool-pack) |
+| `internal/layout/cacheguard.go` | False-share detection, `ApplyCacheguard` pad insertion |
 | `internal/alignmath` | Alignment padding helpers |
 | `internal/goarch` | Pointer size / align tables per architecture |
-| `internal/fixer` | Source rewrite to suggested field order |
-| `internal/formatter` | text / JSON / table output |
+| `internal/fixer` | Source rewrite, `--diff`, bool-pack + Cacheguard pad inserts |
+| `internal/formatter` | text / JSON / table / SARIF (+ `CLINE` for false-share) |
+| `internal/config` | `.goalign.yml` loader |
+| `internal/diff` | Unified diff for dry-run fix |
+| `internal/pkgscan` | Opt-in `go/packages` type sizes |
 | `internal/bytesconv` | Unsafe string/bytes helpers |
+| `schemas/` | JSON schema for analyze output |
 | `examples/` | Sample structs for demos |
 
 ## Key design rules
@@ -55,7 +62,9 @@ Ecosystem: [gopherust-io](https://github.com/gopherust-io/gopherust-io/blob/main
 - **Arch-parameterized:** sizing comes from `goarch` / `SizerFor`; default matches the host unless `--arch` is set.
 - **Allocation-sensitive math:** `Compute` / `Suggest` reuse buffers; keep hot paths free of per-field heap churn.
 - **Ignore directives:** `// goalign:ignore` skips structs the analyzer must not report or rewrite.
-- **Suggest policy:** atomics / wide counters first where applicable, then density packing (NATS-inspired notes such as `atomics-first` / `bool-pack`).
+- **Suggest policy:** default `atomics` (atomics first + density); `density` / `stable` via `--policy`. Notes include `atomics-first`, `bool-pack`, `ptrdata`, `false-share`.
+- **Cacheguard:** detect contended fields sharing a cache line; opt-in `--cacheguard` inserts `_cgpadN` pads (`internal/layout/cacheguard.go`).
+- **Config:** `.goalign.yml` supplies defaults; explicit CLI flags win.
 
 ## Core APIs / interfaces
 
@@ -83,8 +92,9 @@ Example: `goalign analyze ./pkg`
 1. Cobra `analyze` resolves paths and `GOARCH` / format flags.
 2. `analyzer.AnalyzeFile` parses AST and collects struct types (honoring ignores).
 3. For each struct, `layout.Compute` measures padding; `Suggest` proposes a reorder when waste exceeds policy.
-4. `formatter.Format` prints text/JSON/table; with `--fail-on-findings`, non-zero exit if waste ≥ `--min-waste`.
-5. `goalign fix` follows the same analysis path, then `fixer.FixPath` rewrites source field order.
+4. Cacheguard: emit `false-share` notes when contended fields share a cache line; with `--cacheguard`, `ApplyCacheguard` adds `_cgpadN` fields to Suggested.
+5. `formatter.Format` prints text/JSON/table/SARIF (`CLINE` when false-share); with `--fail-on-findings`, non-zero exit if waste ≥ `--min-waste`.
+6. `goalign fix` follows the same analysis path, then `fixer` rewrites (reorder and/or Cacheguard pads; `--diff` for preview).
 
 ## Bootstrap / lifecycle
 

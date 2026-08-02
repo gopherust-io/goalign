@@ -10,7 +10,7 @@ import (
 func TestDecodeVarintTagField16(t *testing.T) {
 	// Field 16, wire type 0 (varint), value 7 → tag = (16<<3)|0 = 0x80,0x01 then value 0x07
 	data := []byte{0x80, 0x01, 0x07}
-	fields := parseProtobufFields(data)
+	fields := parseProtobufFields(data, 0)
 	if len(fields) != 1 {
 		t.Fatalf("expected 1 field, got %d: %+v", len(fields), fields)
 	}
@@ -66,6 +66,6 @@ func TestMessageBytesFromFrameInvalidLengthKeepsRaw(t *testing.T) {
 func TestParseProtobufFieldsHugeLengthNoPanic(t *testing.T) {
 	// Length-delimited tag (field 1) + oversized length varint must not panic.
 	data := []byte{0x0a, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f}
-	fields := parseProtobufFields(data)
+	fields := parseProtobufFields(data, 0)
 	_ = fields // may be empty or partial; must not panic
 }
