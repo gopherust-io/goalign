@@ -23,13 +23,15 @@ const (
 	ansiDim    = "\033[2m"
 )
 
-// Format writes analysis results to w in the given format (text|table|json).
+// Format writes analysis results to w in the given format (text|table|json|sarif).
 func Format(w io.Writer, results []analyzer.Result, format string) error {
 	switch strings.ToLower(format) {
 	case "json":
 		return formatJSON(w, results)
 	case "table":
 		return formatTable(w, results)
+	case "sarif":
+		return formatSARIF(w, results)
 	default:
 		return formatText(w, results, useColor(w))
 	}
@@ -137,9 +139,14 @@ func formatText(w io.Writer, results []analyzer.Result, color bool) error {
 			}
 			buf = append(buf, '\n')
 
+			showCLine := notesHavePrefix(issue.Notes, "false-share") || notesHavePrefix(issue.Notes, "cacheguard")
+			clineSize := issue.CacheLine
+			if clineSize <= 0 {
+				clineSize = layout.DefaultCacheLine
+			}
 			if len(issue.Fields) > 0 {
 				buf = append(buf, bytesconv.StringToBytes("  Current\n")...)
-				buf = appendFieldTable(buf, issue.Fields)
+				buf = appendFieldTable(buf, issue.Fields, showCLine, clineSize)
 			}
 			if len(issue.Suggested) > 0 && (issue.Saved > 0 || !sameFieldNames(issue.Fields, issue.Suggested)) {
 				buf = append(buf, bytesconv.StringToBytes("  Suggested")...)
@@ -149,7 +156,7 @@ func formatText(w io.Writer, results []analyzer.Result, color bool) error {
 					buf = append(buf, bytesconv.StringToBytes(" bytes)")...)
 				}
 				buf = append(buf, '\n')
-				buf = appendFieldTable(buf, issue.Suggested)
+				buf = appendFieldTable(buf, issue.Suggested, showCLine, clineSize)
 			}
 			for _, note := range issue.Notes {
 				buf = append(buf, bytesconv.StringToBytes("  note: ")...)
@@ -233,10 +240,26 @@ func appendSeverity(buf []byte, severity string, color bool) []byte {
 	return buf
 }
 
-func appendFieldTable(buf []byte, fields []layout.Field) []byte {
+func notesHavePrefix(notes []string, prefix string) bool {
+	for _, n := range notes {
+		if strings.HasPrefix(n, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func appendFieldTable(buf []byte, fields []layout.Field, showCLine bool, cacheLine int) []byte {
+	if cacheLine <= 0 {
+		cacheLine = layout.DefaultCacheLine
+	}
 	var twBuf strings.Builder
 	tw := tabwriter.NewWriter(&twBuf, 0, 0, 2, ' ', 0)
-	_, _ = io.WriteString(tw, "    NAME\tTYPE\tSIZE\tOFFSET\tALIGN\n")
+	if showCLine {
+		_, _ = io.WriteString(tw, "    NAME\tTYPE\tSIZE\tOFFSET\tALIGN\tCLINE\n")
+	} else {
+		_, _ = io.WriteString(tw, "    NAME\tTYPE\tSIZE\tOFFSET\tALIGN\n")
+	}
 	for _, field := range fields {
 		_, _ = io.WriteString(tw, "    ")
 		_, _ = io.WriteString(tw, field.Name)
@@ -248,6 +271,10 @@ func appendFieldTable(buf []byte, fields []layout.Field) []byte {
 		_, _ = io.WriteString(tw, strconv.Itoa(field.Offset))
 		_, _ = io.WriteString(tw, "\t")
 		_, _ = io.WriteString(tw, strconv.Itoa(field.Align))
+		if showCLine {
+			_, _ = io.WriteString(tw, "\t")
+			_, _ = io.WriteString(tw, strconv.Itoa(field.Offset/cacheLine))
+		}
 		_, _ = io.WriteString(tw, "\n")
 	}
 	_ = tw.Flush()

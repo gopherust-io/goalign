@@ -63,6 +63,47 @@ func TestFilterMinWasteAndCount(t *testing.T) {
 	}
 }
 
+func TestFilterMinWasteKeepsCacheguard(t *testing.T) {
+	t.Parallel()
+	in := []analyzer.Result{{
+		File: "a.go",
+		Issues: []analyzer.Issue{
+			{StructName: "PadOnly", Wasted: 2},
+			{StructName: "FalseShare", Wasted: 0, Notes: []string{"false-share: A and B share cache line 0"}},
+			{StructName: "Guarded", Wasted: 0, Notes: []string{"cacheguard: suggested layout isolates contended fields"}},
+		},
+	}}
+	got := filterMinWaste(in, 8)
+	if len(got) != 1 || len(got[0].Issues) != 2 {
+		t.Fatalf("want 2 kept (false-share+cacheguard), got %+v", got)
+	}
+	names := map[string]bool{}
+	for _, iss := range got[0].Issues {
+		names[iss.StructName] = true
+	}
+	if !names["FalseShare"] || !names["Guarded"] || names["PadOnly"] {
+		t.Fatalf("names=%v", names)
+	}
+}
+
+func TestShouldFormatAfterArches(t *testing.T) {
+	t.Parallel()
+	if !shouldFormatAfterArches("text", false, nil) {
+		t.Fatal("no arches: always format")
+	}
+	if shouldFormatAfterArches("text", false, []string{"amd64"}) {
+		t.Fatal("text+arches without verbose: matrix only")
+	}
+	if !shouldFormatAfterArches("text", true, []string{"amd64"}) {
+		t.Fatal("text+arches+verbose")
+	}
+	for _, f := range []string{"json", "sarif", "table", "JSON"} {
+		if !shouldFormatAfterArches(f, false, []string{"amd64"}) {
+			t.Fatalf("%s should format under arches", f)
+		}
+	}
+}
+
 func TestShouldExclude(t *testing.T) {
 	prev := exclude
 	t.Cleanup(func() { exclude = prev })
@@ -147,7 +188,7 @@ type Bad struct {
 	minWaste = 0
 	exclude = nil
 
-	results, nFiles, fileErrs, err := collectResults(dir)
+	results, nFiles, fileErrs, err := collectResults(nil, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +200,7 @@ type Bad struct {
 	}
 
 	minWaste = 1000
-	results, _, _, err = collectResults(dir)
+	results, _, _, err = collectResults(nil, dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,12 +208,12 @@ type Bad struct {
 		t.Fatalf("min-waste should filter all: %+v", results)
 	}
 
-	if _, _, _, err := collectResults(filepath.Join(dir, "missing")); err == nil {
+	if _, _, _, err := collectResults(nil, filepath.Join(dir, "missing")); err == nil {
 		t.Fatal("expected missing path error")
 	}
 
 	empty := t.TempDir()
-	_, nFiles, _, err = collectResults(empty)
+	_, nFiles, _, err = collectResults(nil, empty)
 	if err != nil || nFiles != 0 {
 		t.Fatalf("empty dir: nFiles=%d err=%v", nFiles, err)
 	}
@@ -191,7 +232,8 @@ type Bad struct {
 	_ = os.WriteFile(p1, bytesconv.StringToBytes(src), 0o644)
 	_ = os.WriteFile(p2, bytesconv.StringToBytes(src), 0o644)
 
-	results, errs := analyzeParallel([]string{p1, p2, filepath.Join(dir, "missing.go")}, layout.SizerFor("amd64"))
+	opts := analyzer.Options{Sizer: layout.SizerFor("amd64"), Policy: layout.PolicyAtomics}
+	results, errs := analyzeParallel([]string{p1, p2, filepath.Join(dir, "missing.go")}, opts)
 	if errs != 1 {
 		t.Fatalf("fileErrs=%d want 1", errs)
 	}

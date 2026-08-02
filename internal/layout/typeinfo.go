@@ -26,7 +26,7 @@ func ValidArch(name string) bool {
 // Unresolvable array lengths and unknown named types return Unknown.
 func (s Sizer) TypeInfo(expr ast.Expr, locals map[string]Info) Info {
 	if expr == nil {
-		return s.ptr()
+		return Unknown
 	}
 	switch t := expr.(type) {
 	case *ast.Ident:
@@ -60,7 +60,12 @@ func (s Sizer) TypeInfo(expr ast.Expr, locals map[string]Info) Info {
 	case *ast.StructType:
 		return s.structInfo(t, locals)
 	case *ast.SelectorExpr:
-		return s.selectorInfo(t)
+		return s.selectorInfo(t, locals)
+	case *ast.IndexExpr:
+		// atomic.Pointer[T] / generic instantiation — size of the base type.
+		return s.TypeInfo(t.X, locals)
+	case *ast.IndexListExpr:
+		return s.TypeInfo(t.X, locals)
 	case *ast.MapType, *ast.ChanType, *ast.FuncType:
 		return s.ptr()
 	case *ast.InterfaceType:
@@ -114,7 +119,7 @@ func (s Sizer) identInfo(name string, locals map[string]Info) Info {
 	}
 }
 
-func (s Sizer) selectorInfo(sel *ast.SelectorExpr) Info {
+func (s Sizer) selectorInfo(sel *ast.SelectorExpr, locals map[string]Info) Info {
 	pkg := ""
 	if id, ok := sel.X.(*ast.Ident); ok {
 		pkg = id.Name
@@ -124,11 +129,36 @@ func (s Sizer) selectorInfo(sel *ast.SelectorExpr) Info {
 		switch name {
 		case "Bool", "Int32", "Uint32":
 			return Info{Size: 4, Align: 4}
-		case "Int64", "Uint64", "Uintptr", "Pointer", "Value":
-			// Atomics stay 8-byte aligned even on 32-bit (nats convention).
+		case "Int64", "Uint64":
+			// 64-bit atomics stay 8-byte aligned even on 32-bit.
 			return Info{Size: 8, Align: 8}
+		case "Uintptr", "Pointer":
+			// Pointer-sized; Align matches uintptr (not forced to 8).
+			return s.ptr()
+		case "Value":
+			// atomic.Value is an interface (any).
+			return Info{Size: 2 * s.PtrSize, Align: s.PtrSize}
 		case "Int", "Uint":
 			return s.ptr()
+		}
+	}
+	if pkg == "unsafe" && name == "Pointer" {
+		return s.ptr()
+	}
+	if pkg == "sync" {
+		switch name {
+		case "Mutex":
+			// state int32 + sema uint32
+			return Info{Size: 8, Align: 4}
+		case "RWMutex":
+			// w Mutex + reader/writer semaphores (amd64/arm64 layout ≈ 24 bytes)
+			return Info{Size: 24, Align: 4}
+		}
+	}
+	// Opt-in --packages mode fills locals with "pkg.Type" keys.
+	if locals != nil && pkg != "" {
+		if info, ok := locals[pkg+"."+name]; ok {
+			return info
 		}
 	}
 	// pkg.Type without go/types — unknown.
@@ -154,20 +184,34 @@ func (s Sizer) structInfo(st *ast.StructType, locals map[string]Info) Info {
 		}
 		n := fieldNameCount(f)
 		for i := 0; i < n; i++ {
-			total, wasted, _ = alignmath.AddField(total, wasted, info.Size, info.Align)
+			var ok bool
+			total, wasted, _, ok = alignmath.AddField(total, wasted, info.Size, info.Align)
+			if !ok {
+				return Unknown
+			}
 			lastSize = info.Size
 			fieldCount++
 		}
 	}
-	total, _, maxAlign = alignmath.Finish(total, wasted, maxAlign, lastSize, fieldCount)
+	var ok bool
+	total, _, maxAlign, ok = alignmath.Finish(total, wasted, maxAlign, lastSize, fieldCount)
+	if !ok {
+		return Unknown
+	}
 	return Info{Size: total, Align: maxAlign}
 }
 
 // CollectLocals resolves same-file defined types (aliases and defined types).
 // Iterates to a fixpoint so order of declarations does not matter.
 func (s Sizer) CollectLocals(file *ast.File) map[string]Info {
+	sizes, _ := s.CollectLocalsFull(file)
+	return sizes
+}
+
+// CollectLocalsFull is CollectLocals plus flag inheritance for defined/alias types.
+func (s Sizer) CollectLocalsFull(file *ast.File) (map[string]Info, map[string]FieldFlags) {
 	if file == nil {
-		return nil
+		return nil, nil
 	}
 	specs := make([]*ast.TypeSpec, 0)
 	for _, decl := range file.Decls {
@@ -182,7 +226,7 @@ func (s Sizer) CollectLocals(file *ast.File) map[string]Info {
 		}
 	}
 	if len(specs) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	locals := make(map[string]Info, len(specs))
@@ -203,7 +247,38 @@ func (s Sizer) CollectLocals(file *ast.File) map[string]Info {
 			break
 		}
 	}
-	return locals
+
+	flags := make(map[string]FieldFlags, len(specs))
+	for pass := 0; pass < len(specs)+2; pass++ {
+		progress := false
+		for _, ts := range specs {
+			if _, done := flags[ts.Name.Name]; done {
+				continue
+			}
+			if _, ok := locals[ts.Name.Name]; !ok {
+				continue
+			}
+			f := classifyFlags(ts.Type, locals[ts.Name.Name])
+			if f == 0 {
+				if id, ok := ts.Type.(*ast.Ident); ok {
+					if uf, ok := flags[id.Name]; ok {
+						f = uf
+					}
+				}
+			}
+			if f != 0 {
+				flags[ts.Name.Name] = f
+				progress = true
+			}
+		}
+		if !progress {
+			break
+		}
+	}
+	if len(flags) == 0 {
+		flags = nil
+	}
+	return locals, flags
 }
 
 func fieldNameCount(f *ast.Field) int {

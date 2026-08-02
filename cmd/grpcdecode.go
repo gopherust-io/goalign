@@ -14,11 +14,16 @@ import (
 	"github.com/spf13/cobra"
 )
 
+const (
+	maxGRPCHexInput  = 8 << 20 // 8 MiB hex text
+	maxGRPCNestDepth = 32
+)
+
 var grpcDecodeCmd = &cobra.Command{
 	Use:   "grpc-decode [hex-file]",
-	Short: "Decode gRPC/protobuf hex dump to JSON",
-	Long: `Decode gRPC/protobuf binary data from hex dump to JSON format.
-Can read from file or stdin.`,
+	Short: "Decode gRPC/protobuf hex dump to JSON (utility)",
+	Long: `Utility: decode gRPC/protobuf binary data from a hex dump to JSON.
+Not part of the struct-alignment workflow. Can read from file or stdin.`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		var hexData string
@@ -29,11 +34,17 @@ Can read from file or stdin.`,
 			if err != nil {
 				return fmt.Errorf("failed to read stdin: %w", err)
 			}
+			if len(data) > maxGRPCHexInput {
+				return fmt.Errorf("stdin input exceeds %d bytes", maxGRPCHexInput)
+			}
 			hexData = strings.TrimSpace(bytesconv.BytesToString(data))
 		} else {
 			data, err := os.ReadFile(args[0])
 			if err != nil {
 				return fmt.Errorf("failed to read file: %w", err)
+			}
+			if len(data) > maxGRPCHexInput {
+				return fmt.Errorf("input exceeds %d bytes", maxGRPCHexInput)
 			}
 			hexData = strings.TrimSpace(bytesconv.BytesToString(data))
 		}
@@ -140,13 +151,16 @@ func isHex(s string) bool {
 
 func decodeProtobufWireFormat(data []byte) map[string]interface{} {
 	result := make(map[string]interface{})
-	result["message"] = parseProtobufFields(data)
+	result["message"] = parseProtobufFields(data, 0)
 	result["metadata"] = extractMetadata(data)
 	result["readable_strings"] = extractStrings(data)
 	return result
 }
 
-func parseProtobufFields(data []byte) []map[string]interface{} {
+func parseProtobufFields(data []byte, depth int) []map[string]interface{} {
+	if depth > maxGRPCNestDepth {
+		return nil
+	}
 	var fields []map[string]interface{}
 	pos := 0
 	maxIterations := 1000 // Prevent infinite loops
@@ -214,7 +228,7 @@ func parseProtobufFields(data []byte) []map[string]interface{} {
 
 				var nested []map[string]interface{}
 				if isLikelyMessage {
-					nested = parseProtobufFields(bytes)
+					nested = parseProtobufFields(bytes, depth+1)
 					if len(nested) > 0 && len(nested) < 100 && looksLikeValidProtobuf(nested) {
 						field["nested_message"] = nested
 						field["value_type"] = "message"

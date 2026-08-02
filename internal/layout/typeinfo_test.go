@@ -171,14 +171,73 @@ type S struct {
 		t.Fatal(err)
 	}
 	s := layout.SizerFor("amd64")
-	locals := s.CollectLocals(file)
+	locals, flags := s.CollectLocalsFull(file)
 	if locals["ID"].Size != 8 || locals["Alias"].Size != 8 {
 		t.Fatalf("locals=%v", locals)
 	}
+	if flags["ID"]&layout.FlagAtomic == 0 || flags["Alias"]&layout.FlagAtomic == 0 {
+		t.Fatalf("expected atomic flags for ID/Alias: %v", flags)
+	}
 	st := file.Decls[2].(*ast.GenDecl).Specs[0].(*ast.TypeSpec).Type.(*ast.StructType)
-	res, _ := s.Compute(nil, st.Fields, locals)
+	res, fields := s.Compute(nil, st.Fields, locals, flags)
 	if res.Unknown || res.Wasted < 7 {
 		t.Fatalf("res=%+v", res)
+	}
+	if !fields[0].IsAtomic() {
+		t.Fatalf("Alias field should be atomic: %+v", fields[0])
+	}
+}
+
+func TestAtomicValueAndUnsafePointerSizes(t *testing.T) {
+	t.Parallel()
+	amd := layout.SizerFor("amd64")
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "t.go", `package p
+import ("sync/atomic"; "unsafe")
+type S struct {
+	V atomic.Value
+	P unsafe.Pointer
+	U atomic.Uintptr
+	X byte
+}
+`, parser.ParseComments)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := file.Decls[1].(*ast.GenDecl).Specs[0].(*ast.TypeSpec).Type.(*ast.StructType)
+	res, fields := amd.Compute(nil, st.Fields, nil)
+	if res.Unknown {
+		t.Fatalf("unexpected unknown: %+v", res)
+	}
+	by := map[string]layout.Field{}
+	for _, f := range fields {
+		by[f.Name] = f
+	}
+	if by["V"].Size != 16 || by["V"].Align != 8 {
+		t.Fatalf("atomic.Value amd64: %+v", by["V"])
+	}
+	if by["P"].Size != 8 || by["U"].Size != 8 {
+		t.Fatalf("ptr-sized: P=%+v U=%+v", by["P"], by["U"])
+	}
+	// Real layout: Value(16)+Pointer(8)+Uintptr(8)+byte+pad7 = 40
+	if res.Total != 40 {
+		t.Fatalf("total=%d want 40", res.Total)
+	}
+
+	x86 := layout.SizerFor("386")
+	res32, fields32 := x86.Compute(nil, st.Fields, nil)
+	if res32.Unknown {
+		t.Fatal("386 unknown")
+	}
+	by32 := map[string]layout.Field{}
+	for _, f := range fields32 {
+		by32[f.Name] = f
+	}
+	if by32["V"].Size != 8 || by32["V"].Align != 4 {
+		t.Fatalf("atomic.Value 386: %+v", by32["V"])
+	}
+	if by32["P"].Size != 4 || by32["U"].Size != 4 {
+		t.Fatalf("386 ptr-sized: P=%+v U=%+v", by32["P"], by32["U"])
 	}
 }
 
